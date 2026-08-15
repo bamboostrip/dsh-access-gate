@@ -45,7 +45,9 @@ git push origin main --tags
 ```
 
 Workflow 校验：git 标签必须与 `package.json` 的 version 一致（`npm version`
-自动保证）；发布产物带 provenance（SLSA 溯源）。
+自动保证）；发布产物带 provenance（SLSA 溯源）。workflow 内置 `npm install -g
+npm@latest`（OIDC trusted publishing 要求 npm ≥ 11.5.1，Node 22 捆绑的
+npm 10 不支持 —— 会 404 且无有效提示）。
 
 ## 三、本机手动发布（备用）
 
