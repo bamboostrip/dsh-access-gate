@@ -17,10 +17,23 @@
  * 本实现模仿同一官方 API（cordis-plugin-loader 的 create/remove/store）。
  *
  * 生命周期：lazy 挂载（首次 pick 时），entry 随插件卸载 remove（零残留）。
+ *
+ * ── 残留清理（2026-08-16 修复）──────────────────────────────────────────
+ * entry 挂在 loader 根组（不属于本插件 fiber），若卸载/热重载时清理失败会
+ * 留在 loader.store 里；同一 isolate 标签对应同一个 GlobalRealm 符号，残留
+ * entry 的 directoryPicker 服务仍注册在该符号上，新的 create() 在 apply
+ * 阶段 provide 会撞上已注册的实现，抛
+ *   "service "directoryPicker" has been registered at <NativeDirectoryPicker>"
+ * —— 之后所有 pick 请求 500，直到 DSH 重启。因此：
+ *   1) mountNativePicker 挂载前先清扫同包名 + 同 isolate 标签的残留 entry；
+ *   2) 冷启动竞态（loader 的 isolate 钩子随 ctx.plugin(isolate) 异步注册，
+ *      紧接构造的第一次 create 可能抛 "Cyclic __proto__ value"）重试一次。
  */
 import type { PluginContext } from "./types.js";
 /** 官方 native 目录选择后端包名（loader 按 DSH 模块解析加载）。 */
 export declare const NATIVE_PICKER_PACKAGE = "@deepseek-ai/dsh-host-directory-picker-native";
+/** 本插件挂载官方后端时使用的 isolate 标签（entry.options.isolate.directoryPicker）。 */
+export declare const NATIVE_PICKER_ISOLATE_LABEL = "dsh-access-gate:native";
 /** 挂载的官方 picker 句柄。 */
 export interface NativePicker {
     /** 弹官方原生目录对话框；返回选中路径，取消返回 null。 */

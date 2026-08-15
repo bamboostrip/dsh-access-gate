@@ -8,18 +8,38 @@
  * 完整跑通。请求来源用本机 LAN IP（10.144.144.7）模拟"非回环远程"，用 127.0.0.1
  * 模拟本机直连。
  *
- * 运行：node test/e2e-gate.mjs   （Node ≥ 22；49 项断言）
- * 依赖：本机 DSH 安装路径（见 DSH_MODULES），与 NOTES.md 第 2 节相同。
+ * 运行：node test/e2e-gate.mjs   （Node ≥ 22；57 项断言）
+ * 依赖：本机 DSH 安装路径（自动探测 fnm 树，可用 DSH_MODULES 环境变量覆盖），
+ * 与 NOTES.md 第 2 节相同。
  * 注意：改 src/*.ts 后先 npm run build，本测试测的是构建产物。
  */
 
 import { request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // ── 真实 DSH 模块（绝对路径导入，传递依赖从 DSH 树内解析）──────────────────
-const DSH_MODULES = "C:/Users/Bambo/AppData/Roaming/fnm/node-versions/v24.18.0/installation/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai";
+// 路径自动探测：优先当前 fnm 安装树，找不到时回退到环境变量 DSH_MODULES 指定的路径。
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+const FNM_BASE = join(homedir(), "AppData", "Roaming", "fnm", "node-versions");
+let DSH_MODULES = process.env.DSH_MODULES;
+if (!DSH_MODULES && existsSync(FNM_BASE)) {
+	const candidates = [];
+	for (const entry of readdirSync(FNM_BASE, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const candidate = join(FNM_BASE, entry.name, "installation", "node_modules", "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai");
+		if (existsSync(candidate)) candidates.push(candidate);
+	}
+	if (candidates.length === 0) throw new Error("找不到本机 DSH 安装树（@deepseek-ai/dsh），请设置环境变量 DSH_MODULES 指向其 node_modules/@deepseek-ai");
+	candidates.sort((a, b) => b.localeCompare(a));
+	DSH_MODULES = candidates[0];
+}
+if (!existsSync(join(DSH_MODULES, "cordis", "package.json"))) throw new Error(`DSH_MODULES 路径无效: ${DSH_MODULES}`);
+console.log(`DSH modules: ${DSH_MODULES}`);
 const toUrl = (p) => pathToFileURL(p).href;
 const { Context } = await import(toUrl(`${DSH_MODULES}/cordis/lib/index.js`));
 const { default: WebServer } = await import(toUrl(`${DSH_MODULES}/dsh-host-webserver/lib/index.js`));
@@ -115,7 +135,9 @@ async function setup({ withGate, gateConfig, credentialsInit }) {
 	await ctx.plugin(makeFakeCredentialsPlugin(credentialsInit));
 	await ctx.plugin(fakeApiProxyPlugin);
 	await ctx.plugin(connection, { trustedHosts: [], maxRequestBodyBytes: 16 * 1024 * 1024 });
-	if (withGate) await ctx.plugin(gate, gateConfig ?? { tokenTtlMs: 3600_000 });
+	let gateFiber = null;
+	if (withGate) gateFiber = ctx.plugin(gate, gateConfig ?? { tokenTtlMs: 3600_000 });
+	await gateFiber;
 	// 触发 webServer init（懒加载）并等待端口就绪
 	const server = ctx.webServer.server;
 	const port = await new Promise((resolve, reject) => {
@@ -146,7 +168,7 @@ async function setup({ withGate, gateConfig, credentialsInit }) {
 		res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		res.end(ctx.webServer.applyIndexTaps("<!DOCTYPE html><html><head></head><body>dsh e2e shell</body></html>"));
 	});
-	return { ctx, port };
+	return { ctx, port, gateFiber };
 }
 
 // ── HTTP 请求助手（可显式设 Host / Origin / Cookie，模拟 curl）──────────────
@@ -210,7 +232,16 @@ const DOMAIN = "codsh.famlife.top";
 const rpc = (method, payload = {}) => JSON.stringify({ type: "client-request", rpcId: "t", method, payload });
 
 // ── 主体 ──────────────────────────────────────────────────────────────────
-const LAN = "10.144.144.7"; // 本机 LAN IP（模拟非回环远程来源）
+// 远程来源 IP 自动探测：优先 10.144.144.x 网段，否则用第一个非回环 IPv4
+// （模拟 nginx 反代的非回环来源；E2E 用 localAddress 绑定该 IP 发起请求）。
+import { networkInterfaces } from "node:os";
+const LAN_CANDIDATES = Object.values(networkInterfaces()).flat()
+	.filter((iface) => iface && iface.family === "IPv4" && !iface.internal)
+	.map((iface) => iface.address)
+	.sort((a, b) => (a.startsWith("10.144.144.") ? -1 : 0) - (b.startsWith("10.144.144.") ? -1 : 0));
+const LAN = LAN_CANDIDATES[0];
+if (!LAN) throw new Error("找不到非回环 IPv4 地址来模拟远程来源");
+console.log(`远程来源=${LAN} (探测)`);
 const LOCAL = "127.0.0.1";
 
 const base = await setup({ withGate: false });
@@ -355,10 +386,12 @@ let cookie = "";
 	check("[gated] 远程带cookie pick-directory → 403（路由内回环钉死）", r13.status, 403);
 
 	// 20b. 真实 loader 挂载官方 native 后端（isolate realm）—— 上一步已触发 lazy 挂载
-	const nativeEntries = Object.entries(gated.ctx.loader.store).filter(([, e]) => e.ctx?.directoryPicker !== undefined);
+	// 通过 entry.fiber.store 读取（mountNativePicker 的读取方式；entry.ctx 属性
+	// 读取在 loader 以插件挂载的真实应用形态下会抛 "without inject"）。
+	const nativeEntries = Object.entries(gated.ctx.loader.store).filter(([, e]) => e.fiber?.store?.["directoryPicker"] !== undefined);
 	check("[gated] loader 已挂载官方 native 后端 entry", nativeEntries.length, (n) => n >= 1);
 	if (nativeEntries.length > 0) {
-		const capability = nativeEntries[0][1].ctx.directoryPicker.capability();
+		const capability = nativeEntries[0][1].fiber.store["directoryPicker"].value.capability();
 		check("[gated] 挂载的 capability.kind === native（官方实现，跨平台）", capability.kind, "native");
 		check("[gated] capability 提供 pick 函数", typeof capability.pick, "function");
 	}
@@ -368,6 +401,50 @@ let cookie = "";
 	check("[gated] 带cookie GET / → 200 index HTML", r14.status, 200);
 	check("[gated] index 注入 randomUUID polyfill 脚本", r14, hasBody("randomUUID"));
 	check("[gated] polyfill 幂等守卫存在（不覆盖已存在的实现）", r14, hasBody('typeof crypto.randomUUID !== "function"'));
+}
+
+// ========== 阶段 2.5：原生 picker 挂载修复（冷启动 / 残留自愈 / 卸载清理）==========
+{
+	const { mountNativePicker } = await import("../lib/native-picker.js");
+	const isNativeEntry = (e) => e.options?.name === "@deepseek-ai/dsh-host-directory-picker-native";
+	const nativeCount = (c) => Object.values(c.loader.store).filter(isNativeEntry).length;
+
+	// 2.5a. 冷启动：loader 刚构造立即挂载 —— isolate 钩子异步注册的竞态由重试兜底
+	//       （修复前：Cyclic __proto__ value → 500）
+	const cold = new Context();
+	new Loader(cold, { baseUrl: toUrl(DSH_MODULES) + "/" });
+	try {
+		const picker = await mountNativePicker(cold);
+		check("[picker] 冷启动：loader 构造后立即挂载成功（重试兜底）", true, true);
+		await picker.dispose();
+	} catch (error) {
+		check("[picker] 冷启动：loader 构造后立即挂载成功（重试兜底）", false, true, error.message);
+	}
+
+	// 2.5b. 残留自愈：先挂载不 dispose，再次挂载 —— 清扫后成功且 store 唯一
+	//       （修复前：service "directoryPicker" has been registered → 500 死锁）
+	try {
+		const p1 = await mountNativePicker(gated.ctx);
+		const p2 = await mountNativePicker(gated.ctx);
+		check("[picker] 残留自愈：连续两次挂载成功", true, true);
+		check("[picker] 残留自愈：store 只有 1 个 native entry（清扫生效）", nativeCount(gated.ctx), 1);
+		await p1.dispose(); // 幂等：entry 已被清扫移除，不抛错
+		await p2.dispose();
+		check("[picker] dispose 后 store 无残留", nativeCount(gated.ctx), 0);
+	} catch (error) {
+		check("[picker] 残留自愈：连续两次挂载成功", false, true, error.message);
+	}
+
+	// 2.5c. 插件卸载清理：gate fiber dispose 后 store 无残留
+	//       （修复前：卸载 effect 在注册时捕获 null promise → entry 泄漏）
+	const gUnload = await setup({ withGate: true });
+	const rPick = await rawRequest({ port: gUnload.port, via: LOCAL, host: `127.0.0.1:${gUnload.port}`, method: "POST", path: "/-/gate/pick-directory" });
+	check("[picker] 卸载前：路由挂载 200", rPick.status, 200);
+	check("[picker] 卸载前 store 有 native entry", nativeCount(gUnload.ctx), 1);
+	await gUnload.gateFiber.dispose();
+	check("[picker] 插件卸载后 store 无残留（卸载清理生效）", nativeCount(gUnload.ctx), 0);
+	try { gUnload.ctx.webServer.server.closeAllConnections?.(); } catch {}
+	await new Promise((resolve) => gUnload.ctx.webServer.server.close(() => resolve()));
 }
 
 // ========== 阶段 3：免密网段 + 环境变量密码 ==========

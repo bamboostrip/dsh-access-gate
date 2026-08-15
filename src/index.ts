@@ -443,6 +443,16 @@ export async function apply(ctx: PluginContext, config: AuthGateConfig = {}): Pr
 		}
 		return nativePickerPromise;
 	};
+	/** 卸载 picker（移除 loader entry + 清缓存）；无挂载时静默。 */
+	const disposeNativePicker = async (): Promise<void> => {
+		const current = nativePickerPromise;
+		nativePickerPromise = null;
+		try {
+			await current?.catch(() => null).then((picker) => picker?.dispose());
+		} catch {
+			// 清理失败不阻塞（entry 残留由下次 mount 前的清扫兜底）。
+		}
+	};
 	const pickRoute = ctx.webServer.register({
 		kind: "exact",
 		path: PICK_PATH,
@@ -472,6 +482,11 @@ export async function apply(ctx: PluginContext, config: AuthGateConfig = {}): Pr
 				res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
 				res.end(JSON.stringify({ path }));
 			} catch (error) {
+				// pick 失败（对话框错误 / 客户端中断 / 挂载失败）：释放 loader
+				// entry 并清缓存 —— 残留 entry 会让后续挂载报
+				// "service "directoryPicker" has been registered"（死锁直到 DSH
+				// 重启，见 native-picker.ts 文件头"残留清理"）。
+				await disposeNativePicker();
 				if (res.writableEnded) return;
 				res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
 				res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
@@ -479,11 +494,10 @@ export async function apply(ctx: PluginContext, config: AuthGateConfig = {}): Pr
 		}
 	});
 	ctx.effect(() => pickRoute, "auth-gate: native pick route");
-	// 卸载时卸下官方 native picker entry（若已挂载）。
-	ctx.effect(async () => {
-		const picker = await nativePickerPromise?.catch(() => null);
-		await picker?.dispose();
-	}, "auth-gate: native picker entry");
+	// 卸载/停用时卸下官方 native picker entry（若已挂载）。
+	// 注意：disposer 必须在此刻（卸载时）读取 nativePickerPromise —— 若像
+	// 旧写法那样在 effect 注册时就读，当时 promise 恒为 null，entry 会泄漏。
+	ctx.effect(() => () => disposeNativePicker(), "auth-gate: native picker entry");
 
 	// randomUUID polyfill 注入（每次 index.html 响应时应用；幂等守卫防重复）。
 	const removePolyfill = ctx.webServer.tapIndex((html) =>

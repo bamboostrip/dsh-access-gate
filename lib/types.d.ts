@@ -100,6 +100,24 @@ export interface LoaderService {
     store: Record<string, LoaderEntry>;
 }
 export interface LoaderEntry {
+    /** entry id（loader.store 的键；含父级前缀的完整 id）。 */
+    id: string;
+    /** entry 配置（create 时传入的 options；isolate 标签用于残留清扫）。 */
+    options?: {
+        name?: string;
+        isolate?: Record<string, string | true>;
+    };
+    /**
+     * entry 的插件 fiber。服务 provide 的原始记录在 fiber.store[name]：
+     * `{ name, value, fiber, check }`（cordis ReflectService.provide L799-823）。
+     * 读 entry 内服务用这里 —— entry.ctx 的属性读取会触发 cordis 的注入检查
+     * （真实应用 loader 以插件挂载时抛 "cannot get property ... without inject"）。
+     */
+    fiber?: {
+        store?: Record<string, {
+            value: DirectoryPickerService;
+        }>;
+    };
     ctx: PluginContext & {
         directoryPicker?: DirectoryPickerService;
     };

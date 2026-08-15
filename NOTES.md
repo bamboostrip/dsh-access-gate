@@ -164,10 +164,32 @@ E2E 测试 `test/e2e-gate.mjs` 保持 JS：它测的是**编译产物**（`lib/i
    下），顺带封掉了这个 Host 欺骗漏洞（E2E 第 15 条）。
 7. cookie 未加 `Secure`：兼容 LAN 明文 HTTP 直连（dsh-lan-access 场景）。
    公网部署务必 HTTPS（nginx 已配）。
+8. ~~**本机原生选择器间歇性 500（"service directoryPicker has been
+   registered" / "Cyclic __proto__ value" / "cannot get property
+   directoryPicker without inject"）**~~ **已修复（v0.5.0）**：
+   - 根因一（残留死锁）：native picker 的 loader entry 挂在根组，卸载清理
+     effect 原写法在**注册时**读取 `nativePickerPromise`（当时恒为 null），
+     disposer 实际为空 → 插件 fiber 重启（plugin-manager 重载 / 配置变更 /
+     HMR）后旧 entry 泄漏在 loader.store；其 `directoryPicker` 服务注册在
+     共享的 GlobalRealm 符号上，新实例再挂载时 `provide` 撞上已注册实现 →
+     **所有 pick 请求 500，直到 DSH 重启**。修复：卸载 disposer 改为
+     **卸载时**读取当前 promise；pick 失败（catch）即释放 entry + 清缓存；
+     挂载前清扫同包名 + 同 isolate 标签的残留 entry（自愈历史状态）。
+   - 根因二（冷启动竞态）：loader 的 isolate 钩子随 `ctx.plugin(isolate)`
+     （Loader 构造内未 await）异步注册，紧接构造的第一次 `create()` 错过
+     entry-init → patch-context 时 `setPrototypeOf(map, map)` 抛
+     "Cyclic __proto__ value"。修复：`mountNativePicker` 失败后等一个 tick
+     重试一次。E2E 已验证（§6.1 第 24-30 条）。
+   - 根因三（服务读取方式）：`entry.ctx.directoryPicker` 的属性读取在
+     **loader 以插件形式挂载**的真实应用（dsh-app-boot 的 `ctx.plugin(Loader)`）
+     下会走 cordis 的注入检查并抛 "cannot get property \"directoryPicker\"
+     without inject"（E2E 的 `new Loader(ctx, ...)` 形态不抛，行为不一致）。
+     修复：改直读 `entry.fiber.store["directoryPicker"].value`（provide 的
+     原始记录，`{ name, value, fiber, check }`），两种形态一致。
 
 ## 6. 验证
 
-### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，49/49 通过）
+### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，57/57 通过）
 
 用**本机安装的真实 DSH 模块**搭隔离实例（随机端口，不碰线上 3080 实例）：
 `@deepseek-ai/cordis` Context + `dsh-host-webserver`（真实 node:http server）+
@@ -206,6 +228,11 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
 | 21 | **设置密码实时生效**：`credentials.set` + updated 事件后（未重启）远程 → 302 | PASS |
 | 22 | 环境变量密码（`DSH_GATE_PASSWORD`，credentials env 层优先）→ 登录可用 | PASS |
 | 23 | index 注入 randomUUID polyfill + 幂等守卫（替代 lan-access 职责） | PASS |
+| 24 | **冷启动**：loader 构造后立即挂载官方 native 后端成功（v0.5.0 重试兜底；修复前 "Cyclic __proto__ value"） | PASS |
+| 25 | **残留自愈**：连续两次挂载（不 dispose）都成功（v0.5.0 清扫；修复前 "already registered" 死锁） | PASS |
+| 26 | 残留自愈后 store 只有 1 个 native entry（清扫生效） | PASS |
+| 27 | dispose 幂等：已被清扫的 entry dispose 不抛错；dispose 后 store 无残留 | PASS |
+| 28 | **卸载清理**：gate 插件 fiber dispose 后 store 无残留（v0.5.0 卸载时读取 promise；修复前 entry 泄漏） | PASS |
 
 ### 6.2 部署日真机验收清单（真实 nginx + 公网域名，逐项测）
 
@@ -300,7 +327,7 @@ server {
 1. **WS 转发缺失**（nginx 未配 §7.1 的 Upgrade/Connection/proxy_http_version）：
    事件流 `/api/events.mux` 握手失败 → 页面"能开但动不了"。Network 面板可见
    events.mux 失败。
-2. **`sec-fetch-site: cross-site` 误杀**（v0.4.1 已修复：认证后删除该头，
+2. **`sec-fetch-site: cross-site` 误杀**（v0.5.0 已修复：认证后删除该头，
    护栏不再误杀反代下的跨站形态请求）。旧版本升级即可。
 3. **未认证请求被护栏 403 而非 302**：装了插件但没生效（未重启/旧版本）——
    远程未认证应 302 登录页，直接 403 说明门禁没在跑。
@@ -355,6 +382,29 @@ server {
   包的（同一官方 API，`cordis-plugin-loader` 的 create/remove/store）；
 - 挂载是 **lazy**（首次 pick 时）且失败不致命：官方包解析/挂载失败 → 路由
   返回 500 → 客户端壳 onError 显示；认证门禁不受影响；
+
+### 8.3a 挂载生命周期（v0.5.0 修复，见 §5 第 8 条）
+
+- **残留死锁**：entry 挂在 loader 根组，若卸载/热重载清理失败会残留在
+  `loader.store`；同一 isolate 标签 = 同一个 GlobalRealm 符号（loader 级，
+  跨 fiber 存活），残留 entry 的 `directoryPicker` 服务仍注册在该符号上，
+  新 `create()` 的 apply 阶段 `provide` 撞上已注册实现，抛
+  `service "directoryPicker" has been registered` → 所有 pick 请求 500
+  直到 DSH 重启。三重防线：
+  1) **挂载前清扫**（`mountNativePicker`）：移除同包名 + 同 isolate 标签的
+     残留 entry（幂等，自愈历史状态）；
+  2) **失败即释放**（pick 路由 catch）：`disposeNativePicker()` 移除 entry +
+     清 promise 缓存，下次请求重新挂载；
+  3) **卸载必清理**：卸载 disposer 在**卸载时**读取 `nativePickerPromise`
+     （旧写法在 effect 注册时读取，当时恒为 null → disposer 为空 → 泄漏）。
+- **冷启动竞态**：loader 的 isolate 钩子随 `ctx.plugin(isolate)` 异步注册，
+  紧接构造的第一次 `create()` 可能抛 `Cyclic __proto__ value`（entry-init
+  未执行 → patch-context 里 `setPrototypeOf(map, map)`）。等一个 tick 重试
+  一次即恢复。
+- **服务读取方式**：读 entry 内服务用 `entry.fiber.store[name].value`（provide
+  的原始记录），不用 `entry.ctx[name]` 属性读取 —— 后者在 loader 以插件
+  挂载的真实应用下触发 cordis 注入检查抛 "without inject"（§5 第 8 条根因三）。
+- `dispose()` 幂等：entry 已被清扫/移除时静默，不抛错。
 - 卸载零残留：entry 随插件卸载 `ctx.loader.remove(id)`。
 
 ### 8.4 已知限制 / 待办
@@ -396,7 +446,7 @@ server {
 | bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-access-gate |
 | profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-access-gate |
 | 登录 token Map | 进程内存 | 进程退出即消失 |
-| 官方 native picker loader entry | `ctx.loader.remove(id)`（插件清理回调） | `profiles/web` 无残留；进程内无孤儿对话框 worker |
+| 官方 native picker loader entry | 挂载前清扫（自愈）+ 路由 catch 释放 + 卸载 disposer（卸载时读取当前 promise，幂等 remove） | 插件卸载后 `loader.store` 无 native entry（E2E 第 28 条） |
 
 不触碰：用户 `cordis.patch.yml`、DSH 源码、任何用户配置文件。密码若经设置
 界面配置过，留在 `~/.dsh/.credentials.yaml`（DSH 官方凭据库，非本插件写入；
