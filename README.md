@@ -53,6 +53,8 @@ dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 $env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
 ```
 
+> npm 刚发布的新版本在官方 registry 立即可见，但**国内镜像（如 npmmirror）同步可能有几分钟到数小时延迟** —— 如果 `dsh plugin add` 报找不到包，改用 GitHub 方式安装即可（见上）。
+
 > 密码来源优先级：`config.password` > 环境变量 `DSH_GATE_PASSWORD` > `~/.dsh/.credentials.yaml` > `.env`。
 
 ## 使用
