@@ -265,6 +265,49 @@ dsh web      # 或 dsh --profile web
 
 - 本机已装同类插件（绑定 0.0.0.0 + randomUUID polyfill）：
   `C:\Users\Bambo\.dsh\profiles\web\node_modules\dsh-lan-access\`
+
+### 7.1 公网 nginx 参考配置（阿里云等云服务器反代）
+
+公网域名 403 最常见根源是 nginx 转发形态与 DSH 预期不符。参考配置（HTTP + WS 全通）：
+
+```nginx
+server {
+    listen 80;
+    server_name codsh.famlife.top;
+    # 若配了 TLS：listen 443 ssl; ssl_certificate ...; ssl_certificate_key ...;
+
+    location / {
+        proxy_pass http://10.144.144.7:3080;   # 家里 DSH（需公网可达：路由器端口转发/内网穿透）
+        proxy_http_version 1.1;                # ★ 必须：HTTP/1.1（默认 1.0 会断 WS 与 keepalive）
+        proxy_set_header Host $host;           # ★ 域名原样转发（默认 $proxy_host 会变 IP:端口）
+        proxy_set_header Upgrade $http_upgrade;        # ★ WS 必需
+        proxy_set_header Connection "upgrade";         # ★ WS 必需
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;              # WS 长连接不超时
+        proxy_buffering off;                   # SSE/WS 不缓冲
+    }
+}
+```
+
+注意：`proxy_set_header Host $host;` 把域名传给 DSH —— 门禁按"来源 + Host"
+判定：阿里云来源（非回环）→ 密码认证 → 认证后头改写放行。用默认
+`$proxy_host`（Host=10.144.144.7:3080）也一样工作（仍走认证），两者都支持。
+
+### 7.2 公网 403 排查清单（按概率排序）
+
+1. **WS 转发缺失**（nginx 未配 §7.1 的 Upgrade/Connection/proxy_http_version）：
+   事件流 `/api/events.mux` 握手失败 → 页面"能开但动不了"。Network 面板可见
+   events.mux 失败。
+2. **`sec-fetch-site: cross-site` 误杀**（v0.4.1 已修复：认证后删除该头，
+   护栏不再误杀反代下的跨站形态请求）。旧版本升级即可。
+3. **未认证请求被护栏 403 而非 302**：装了插件但没生效（未重启/旧版本）——
+   远程未认证应 302 登录页，直接 403 说明门禁没在跑。
+4. **浏览器缓存了旧 `__DSH_BOOT__`**：改插件后需重启 DSH + 浏览器硬刷新
+   （Ctrl+Shift+R）。
+5. **nginx 层 403**（阿里云 WAF/安全组/证书域名不符）—— 响应体是 HTML 页面
+   而非 `forbidden` 文本。
 - DSH 源码（护栏/webserver/bridge）见第 2 节路径。
 
 ## 8. 本机原生目录选择（v0.3.0）

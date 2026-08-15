@@ -290,6 +290,10 @@ let cookie = "";
 	const r3 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json", origin: `https://${DOMAIN}`, "sec-fetch-site": "same-origin", cookie }, body: rpc("host.describe") });
 	check("[gated] 远程+域名+Origin+带cookie POST host.describe → 200", r3, jsonOk);
 
+	// 12b. 认证后 cross-site 请求不再被护栏误杀（头改写 + sec-fetch-site 删除）
+	const rCross = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", cookie }, body: rpc("host.describe") });
+	check("[gated] 带cookie + sec-fetch-site:cross-site → 200（护栏不再误杀）", rCross, jsonOk);
+
 	// 13. 特权方法（白名单钉死 loopback）→ 全部 200
 	for (const m of ["settings.describe", "credentials.describe", "llm.discoverModels", "host.pickDirectory", "host.openPath"]) {
 		const payload = m === "credentials.describe" ? { refs: ["VISION_API_KEY"] }
