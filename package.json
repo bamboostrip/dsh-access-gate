@@ -3,6 +3,21 @@
   "version": "0.4.0",
   "description": "DSH plugin: password gate for remote (non-loopback) /api access (passwordless by default), unblock the loopback-pinned privileged endpoints, restore everything on uninstall, and give the local 127.0.0.1 user the native OS folder picker for workspace selection. Zero residue by design. TypeScript source, compiled output.",
   "license": "MIT",
+  "author": "bamboostrip",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bamboostrip/dsh-auth-gate.git"
+  },
+  "homepage": "https://github.com/bamboostrip/dsh-auth-gate#readme",
+  "bugs": {
+    "url": "https://github.com/bamboostrip/dsh-auth-gate/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -22,7 +37,8 @@
     "cordis.patch.yml",
     "README.md",
     "NOTES.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "keywords": [
     "dsh",
