@@ -38,11 +38,18 @@ jobs:
       # 未配置 → repo:owner/repo:ref:refs/tags/v*（tag 触发）。
       - name: Debug OIDC subject
         run: |
+          node -v
+          npm -v
+          echo "NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:+SET}"
           token=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r .value)
           subject=$(echo "$token" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .sub)
           echo "OIDC subject: $subject"
           echo "::notice::OIDC subject = $subject"
+
+      # npm 11.5.1+ 才支持 OIDC trusted publishing；Node 22 捆绑的 npm 10 不支持。
+      - name: Upgrade npm
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
