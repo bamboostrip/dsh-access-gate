@@ -33,6 +33,17 @@ jobs:
             exit 1
           fi
 
+      # 调试：打印 GitHub 签发的 OIDC subject（npm 可信发布者按此精确匹配）。
+      # 匹配规则：配置了 Environment → repo:owner/repo:environment:NAME；
+      # 未配置 → repo:owner/repo:ref:refs/tags/v*（tag 触发）。
+      - name: Debug OIDC subject
+        run: |
+          token=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r .value)
+          subject=$(echo "$token" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .sub)
+          echo "OIDC subject: $subject"
+          echo "::notice::OIDC subject = $subject"
+
       - name: Install dependencies
         run: npm ci
 
