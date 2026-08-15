@@ -18,8 +18,12 @@ loopback 或 `trustedHosts` 白名单域名，否则一律 403 `forbidden`；其
 ## 安装
 
 ```sh
-# 本地目录安装（开发期）：
-dsh plugin --profile web add file:/E:/ALLCODE/project/dsh-auth-gate
+# 构建（改过 src/ 后必须跑）
+npm run build
+
+# 本地开发安装（link: 符号链接 —— 之后改代码只需 build + 重启 DSH，
+# 不用重新 add；file: 则会拷贝一份，改动需重新 add）：
+dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 
 # 发布到 npm 后：
 # dsh plugin --profile web add dsh-auth-gate
@@ -29,15 +33,15 @@ dsh plugin --profile web add file:/E:/ALLCODE/project/dsh-auth-gate
 
 ```sh
 # 推荐：环境变量，不落盘
-DSH_GATE_PASSWORD=你的密码
+$env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
 # 或：在 profiles/web/cordis.patch.yml 覆盖 auth-gate 行配置
 ```
 
 然后重启 DSH 服务生效。
 
-> 前置条件：webserver 必须已绑定 `0.0.0.0` 才能被 nginx 转发到。
-> 本插件不管绑定（职责单一），请用 `dsh-lan-access` 或仿照它的
-> webserver patch 完成绑定。
+> **替代 dsh-lan-access**：本插件已覆盖它的全部职责（0.0.0.0 绑定 +
+> `crypto.randomUUID` polyfill），验证通过后可
+> `dsh plugin --profile web remove dsh-lan-access` 卸载后者，无需任何额外配置。
 
 ## 使用
 
@@ -68,8 +72,10 @@ DSH_GATE_PASSWORD=你的密码
 dsh plugin --profile web remove dsh-auth-gate
 ```
 
-卸载后：包与 bundle patch 一起移除，`server.emit` 拦截器随进程重启消失，
-DSH 恢复原厂护栏行为。插件不修改任何 DSH 源码、不写入用户配置文件。
+卸载后：包与 bundle patch 一起移除（webserver 绑定还原 DSH 默认、polyfill
+停止注入），`server.emit` 拦截器、原生选择器路由、客户端智能 flow 全部随
+`ctx.effect` 清理回调还原，登录态随进程退出消失。插件不修改任何 DSH 源码、
+不写入用户配置文件。完整审计清单见 `NOTES.md` §10。
 
 ## 安全提示
 

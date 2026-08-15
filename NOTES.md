@@ -219,6 +219,34 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
    远程（公网域名）添加工作区 → 仍是应用内 Miller 浏览器。⚠️ 真实弹窗
    只能在真机验证（自动化无法交互）；E2E 只覆盖了路由门禁与 test 模式。
 
+### 6.3 本机安装测试步骤（开发循环）
+
+```powershell
+# 1) 构建（改过 src/ 后必须跑）
+cd E:\ALLCODE\project\dsh-auth-gate
+npm run build
+
+# 2) 安装（开发期用 link: 符号链接 —— 之后改代码只需 build + 重启 DSH，
+#    不用重新 add；file: 则会拷贝一份，改动需重新 add）
+dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
+
+# 3) 设置密码（当前会话，不落盘）并重启 DSH
+$env:DSH_GATE_PASSWORD='你的强密码'
+dsh web      # 或 dsh --profile web
+
+# 4) 验证（对照 §6.2 清单）：
+#    - 本机 http://127.0.0.1:3080 免密全通；添加工作区弹原生对话框
+#    - 公网域名：302 → 登录页 → 密码 → 全通（页面/WS/特权接口/设置页）
+#    - 卸载前先测：dsh plugin --profile web remove dsh-lan-access
+#      再重启 —— 绑定 0.0.0.0 与 randomUUID polyfill 由本插件接管后应无感
+
+# 5) 改代码循环：npm run build → 重启 DSH → 复测
+```
+
+注意：`dsh plugin` 是 pnpm 转发器（`lib/plugin-*.js`）—— 安装即
+`pnpm add`，成功后自动把带 `dsh.bundle` 的包加入 `dsh.profile.bundles`
+层栈；相对路径（`./`、`file:./`、`link:./`）会锚定到**调用目录**。
+
 ## 7. 参考链接
 
 - 本机已装同类插件（绑定 0.0.0.0 + randomUUID polyfill）：
@@ -272,3 +300,50 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
 - 备选方案：DSH 升级后若官方对话框体验变化，可切到 loader isolate 动态挂载
   官方 native 后端（复用 koffi 新式 IFileOpenDialog）；
 - 真机验收：见 §6.2 第 7 条。
+
+## 9. 替代 dsh-lan-access（v0.3.0）
+
+`dsh-auth-gate` 是 `dsh-lan-access` 的**完整替代品**，覆盖其全部职责：
+
+| dsh-lan-access 职责 | 替代位置 |
+|---|---|
+| webserver 绑定 0.0.0.0（nginx 可达） | `cordis.patch.yml` 的 `- id: webserver` 覆盖（同款配置） |
+| `crypto.randomUUID` polyfill（LAN 明文 HTTP 必需） | `src/index.ts` 的 `RANDOM_UUID_POLYFILL_SCRIPT`（tapIndex 注入，幂等守卫） |
+| （lan-access 没有）远程认证门禁 | 本插件核心 |
+| （lan-access 没有）本机原生目录选择 | §8 智能 flow + pick 路由 |
+
+迁移步骤：装好 dsh-auth-gate 并验证通过后，
+`dsh plugin --profile web remove dsh-lan-access` → 重启 DSH → 按 §6.2 复测。
+过渡期两者共存无害（webserver 覆盖值相同；polyfill 都有幂等守卫，
+重复注入不叠加）。
+
+## 10. 零残留审计（卸载后逐项确认）
+
+插件**全部**运行时副作用都在 ctx.effect 清理回调或包文件里，卸载 =
+`dsh plugin --profile web remove dsh-auth-gate` + 重启 DSH：
+
+| 副作用 | 清理机制 | 验证方法（卸载重启后） |
+|---|---|---|
+| `server.emit` 覆盖（门禁） | `ctx.effect` 还原（§"restore server.emit"） | 远程 POST `/api/host.describe` → 回到 403；`/-/auth/login` → 404 |
+| `/-/gate/pick-directory` 路由 | `register()` disposer → `ctx.effect` | POST 该路径 → 404 |
+| randomUUID polyfill 注入 | `tapIndex()` disposer → `ctx.effect` | GET `/` index.html 不含 `randomUUID` |
+| 客户端智能 flow（slot 注册） | slots.inject 的 disposer（随 client 插件卸载） | 添加工作区对话框 = 官方 auto 判定结果（无壳） |
+| bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-auth-gate |
+| profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-auth-gate |
+| 登录 token Map | 进程内存 | 进程退出即消失 |
+| PowerShell 对话框子进程 | abort / 进程退出 | 无孤儿 powershell 进程 |
+
+不触碰：用户 `cordis.patch.yml`、DSH 源码、任何用户配置文件（密码走环境变量）。
+注：若同时卸载了 dsh-lan-access，webserver 绑定恢复 127.0.0.1（DSH 默认）——
+公网不可达是卸载后的**预期还原**，不是残留。
+
+## 11. 本地 git（2026-08-15 初始化）
+
+- `git init -b main`，首次提交 `c9f6f7c`（v0.3.0 全量）；
+- 仓库级身份：`bamboostrip <55238760+bamboostrip@users.noreply.github.com>`
+  （GitHub noreply，从 gh CLI 账号派生；推送前如需真实邮箱自行
+  `git config user.email`）；
+- `.gitignore`：node_modules / *.tsbuildinfo；**lib/ 是构建产物但必须提交**
+  （`dsh plugin add link:` 装上即用的前提）；
+- 推送流程：真机验收通过 → `git add -A && git commit` → 建 GitHub 仓库 →
+  `git remote add origin ...` → `git push -u origin main`。
