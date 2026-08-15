@@ -1,4 +1,4 @@
-# dsh-auth-gate — 交接文档（新会话必读）
+# dsh-access-gate — 交接文档（新会话必读）
 
 > 本文档记录完整前因后果、源码证据、技术方案与验证清单。
 > **实现状态：已完成。** 核心机制已通过真机级 E2E 验证（见 §6.1），
@@ -220,7 +220,7 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
    application/json' -H 'Origin: https://codsh.famlife.top' --data
    '{"rpcId":"t","method":"host.describe","payload":{}}'` → 无 cookie 应 302；
    带 cookie 应返回 `server-response`。✅ 已被 E2E 第 6 条覆盖（等价形态）
-6. 卸载 `dsh plugin --profile web remove dsh-auth-gate` → 重启 → 复测第 3 步
+6. 卸载 `dsh plugin --profile web remove dsh-access-gate` → 重启 → 复测第 3 步
    应回到 403（护栏还原），`profiles/web` 下无本插件残留文件。
    ⚠️ 仅此条必须在真实实例上做（依赖 `dsh plugin` 的包管理流程）。
 7. **本机添加工作区弹 OS 原生对话框**（v0.3.0 新功能）：本机用
@@ -235,12 +235,12 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
 
 ```powershell
 # 1) 构建（改过 src/ 后必须跑）
-cd E:\ALLCODE\project\dsh-auth-gate
+cd E:\ALLCODE\project\dsh-access-gate
 npm run build
 
 # 2) 安装（开发期用 link: 符号链接 —— 之后改代码只需 build + 重启 DSH，
 #    不用重新 add；file: 则会拷贝一份，改动需重新 add）
-dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
+dsh plugin --profile web add link:E:/ALLCODE/project/dsh-access-gate
 
 # 3) 启动（默认无密码；或先设置密码再启动）
 $env:DSH_GATE_PASSWORD='你的强密码'   # 可选：环境变量方式（credentials env 层优先）
@@ -329,7 +329,7 @@ server {
   （传给官方 pick 的 signal，官方会关对话框/杀子进程）。
 - **官方实现复用**（`src/native-picker.ts`）：`mountNativePicker()` 用
   `ctx.loader.create({ name: "@deepseek-ai/dsh-host-directory-picker-native",
-  isolate: { directoryPicker: "dsh-auth-gate:native" } })` 把官方 native
+  isolate: { directoryPicker: "dsh-access-gate:native" } })` 把官方 native
   后端动态挂到**隔离 realm**（directoryPicker 服务与 root 的 browse 后端
   共存不冲突），取 `capability().pick(signal)` 弹对话框 —— 与官方 auto
   在 loopback 绑定时给出的交互完全一致：
@@ -368,7 +368,7 @@ server {
 
 ## 9. 替代 dsh-lan-access（v0.3.0）
 
-`dsh-auth-gate` 是 `dsh-lan-access` 的**完整替代品**，覆盖其全部职责：
+`dsh-access-gate` 是 `dsh-lan-access` 的**完整替代品**，覆盖其全部职责：
 
 | dsh-lan-access 职责 | 替代位置 |
 |---|---|
@@ -377,7 +377,7 @@ server {
 | （lan-access 没有）远程认证门禁 | 本插件核心 |
 | （lan-access 没有）本机原生目录选择 | §8 智能 flow + pick 路由 |
 
-迁移步骤：装好 dsh-auth-gate 并验证通过后，
+迁移步骤：装好 dsh-access-gate 并验证通过后，
 `dsh plugin --profile web remove dsh-lan-access` → 重启 DSH → 按 §6.2 复测。
 过渡期两者共存无害（webserver 覆盖值相同；polyfill 都有幂等守卫，
 重复注入不叠加）。
@@ -385,7 +385,7 @@ server {
 ## 10. 零残留审计（卸载后逐项确认）
 
 插件**全部**运行时副作用都在 ctx.effect 清理回调或包文件里，卸载 =
-`dsh plugin --profile web remove dsh-auth-gate` + 重启 DSH：
+`dsh plugin --profile web remove dsh-access-gate` + 重启 DSH：
 
 | 副作用 | 清理机制 | 验证方法（卸载重启后） |
 |---|---|---|
@@ -393,8 +393,8 @@ server {
 | `/-/gate/pick-directory` 路由 | `register()` disposer → `ctx.effect` | POST 该路径 → 404 |
 | randomUUID polyfill 注入 | `tapIndex()` disposer → `ctx.effect` | GET `/` index.html 不含 `randomUUID` |
 | 客户端智能 flow + 设置卡片（slot 注册） | slots.inject 的 disposer（随 client 插件卸载） | 添加工作区对话框 = 官方 auto 判定结果；设置界面无"访问认证"卡片 |
-| bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-auth-gate |
-| profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-auth-gate |
+| bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-access-gate |
+| profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-access-gate |
 | 登录 token Map | 进程内存 | 进程退出即消失 |
 | 官方 native picker loader entry | `ctx.loader.remove(id)`（插件清理回调） | `profiles/web` 无残留；进程内无孤儿对话框 worker |
 

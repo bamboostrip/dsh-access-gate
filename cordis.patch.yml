@@ -1,4 +1,4 @@
-# dsh-auth-gate bundle patch — 在 web 组合层挂载本插件的代码行。
+# dsh-access-gate bundle patch — 在 web 组合层挂载本插件的代码行。
 #
 # 设计原则：本文件是包的一部分（安装时随包进入 profiles/web/node_modules，
 # 卸载时随包一起消失），因此这里写配置不会污染用户的 cordis.patch.yml。
@@ -25,5 +25,5 @@
 #    randomUUID polyfill 注入；client 半边：智能目录选择 flow + 设置卡片）。
 - insert:
     - id: auth-gate
-      name: 'dsh-auth-gate'
+      name: 'dsh-access-gate'
       inject: [webServer, loader, credentials]

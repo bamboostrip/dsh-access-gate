@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-dsh-auth-gate has **zero runtime dependencies**: the plugin only uses Node.js
+dsh-access-gate has **zero runtime dependencies**: the plugin only uses Node.js
 built-ins (`node:crypto`, `node:http`, `node:stream`, `node:child_process`) and
 the DSH / Cordis services provided by the host deployment it runs in. It
 declares no `dependencies` in `package.json`.

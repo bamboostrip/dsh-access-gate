@@ -1,5 +1,5 @@
 /**
- * dsh-auth-gate — 本机原生目录选择（复用官方 native 后端，跨平台）
+ * dsh-access-gate — 本机原生目录选择（复用官方 native 后端，跨平台）
  *
  * 通过 loader 动态挂载官方 `@deepseek-ai/dsh-host-directory-picker-native`
  * 包到 isolate 作用域（directoryPicker 服务隔离，与 root 的 browse 后端
@@ -40,14 +40,14 @@ export interface NativePicker {
 export async function mountNativePicker(ctx: PluginContext): Promise<NativePicker> {
 	const entryId = await ctx.loader.create({
 		name: NATIVE_PICKER_PACKAGE,
-		isolate: { directoryPicker: "dsh-auth-gate:native" }
+		isolate: { directoryPicker: "dsh-access-gate:native" }
 	});
 	const entry: LoaderEntry | undefined = ctx.loader.store[entryId];
-	if (entry === undefined) throw new Error(`dsh-auth-gate: loader entry "${entryId}" missing after create`);
+	if (entry === undefined) throw new Error(`dsh-access-gate: loader entry "${entryId}" missing after create`);
 	const capability = entry.ctx.directoryPicker?.capability();
 	if (capability === undefined || capability.kind !== "native") {
 		await ctx.loader.remove(entryId);
-		throw new Error(`dsh-auth-gate: expected native directory picker capability, got ${capability?.kind ?? "none"}`);
+		throw new Error(`dsh-access-gate: expected native directory picker capability, got ${capability?.kind ?? "none"}`);
 	}
 	return {
 		pick: (signal) => capability.pick(signal),

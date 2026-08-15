@@ -1,18 +1,18 @@
 <div align="center">
 
-# dsh-auth-gate
+# dsh-access-gate
 
 **DSH 远程访问认证门禁 · Remote access authentication gate for DeepSeek Harness**
 
 [English](#english) · [中文](#中文)
 
-`dsh plugin --profile web add dsh-auth-gate`
+`dsh plugin --profile web add dsh-access-gate`
 
 </div>
 
 <a name="中文"></a>
 
-# dsh-auth-gate（中文）
+# dsh-access-gate（中文）
 
 DSH（DeepSeek Harness）远程访问认证门禁插件：解决"经 nginx 公网域名转发访问时，`/api/*` 全部 403"的问题 —— 认证通过后所有被浏览器信任护栏拦截的接口（含 `settings.*`、`credentials.*` 等 loopback 钉死的特权接口）全部可用；本机 `127.0.0.1` 访问不受影响；卸载插件一切还原，零残留、不污染用户配置。
 
@@ -34,10 +34,10 @@ DSH（DeepSeek Harness）远程访问认证门禁插件：解决"经 nginx 公�
 
 ```sh
 # 方式一：npm 发布后（推荐）
-dsh plugin --profile web add dsh-auth-gate
+dsh plugin --profile web add dsh-access-gate
 
 # 方式二：GitHub 直装（lib/ 已提交，装上即用）
-dsh plugin --profile web add github:bamboostrip/dsh-auth-gate
+dsh plugin --profile web add github:bamboostrip/dsh-access-gate
 
 # 方式三：本地开发（link: 符号链接，改代码只需 build + 重启）
 npm run build
@@ -99,7 +99,7 @@ server {
 ## 卸载（零残留）
 
 ```sh
-dsh plugin --profile web remove dsh-auth-gate
+dsh plugin --profile web remove dsh-access-gate
 ```
 
 卸载后：包与 bundle patch 一起移除（webserver 绑定还原 DSH 默认、polyfill 停止注入），`server.emit` 拦截器、原生选择器路由、客户端智能 flow 与设置卡片全部随 `ctx.effect` 清理回调还原，登录态随进程退出消失。完整审计见 [NOTES.md](NOTES.md#10-零残留审计卸载后逐项确认)。
@@ -132,7 +132,7 @@ npm run test:e2e       # 真机级 E2E（50 项断言，使用本机真实 DSH �
 
 <a name="english"></a>
 
-# dsh-auth-gate (English)
+# dsh-access-gate (English)
 
 An access authentication gate for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web. It fixes the "everything on `/api/*` returns 403 behind a public nginx domain" problem: after password authentication, every endpoint blocked by the browser-trust fence — including the loopback-pinned privileged methods (`settings.*`, `credentials.*`, `host.openPath`, `host.pickDirectory`, `llm.discoverModels`, `agentPreset.*`) — becomes fully usable. Local `127.0.0.1` access is untouched, and uninstalling restores everything with zero residue.
 
@@ -154,10 +154,10 @@ It is also a full replacement for [dsh-lan-access](https://github.com/Leon0555/d
 
 ```sh
 # Option 1: from npm (recommended after publishing)
-dsh plugin --profile web add dsh-auth-gate
+dsh plugin --profile web add dsh-access-gate
 
 # Option 2: straight from GitHub (lib/ is committed, works out of the box)
-dsh plugin --profile web add github:bamboostrip/dsh-auth-gate
+dsh plugin --profile web add github:bamboostrip/dsh-access-gate
 
 # Option 3: local development (link: symlink; rebuild + restart DSH after changes)
 npm run build
@@ -219,7 +219,7 @@ A public-403 troubleshooting checklist is in [NOTES.md](NOTES.md).
 ## Uninstall (zero residue)
 
 ```sh
-dsh plugin --profile web remove dsh-auth-gate
+dsh plugin --profile web remove dsh-access-gate
 ```
 
 The package and its bundle patch disappear together (webserver binding returns to DSH defaults, polyfill stops), and the `server.emit` interceptor, native picker route, client smart flow, and settings card are all reverted by `ctx.effect` cleanup. Full audit: [NOTES.md](NOTES.md).

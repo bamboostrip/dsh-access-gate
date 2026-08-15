@@ -1,5 +1,5 @@
 /**
- * dsh-auth-gate — 本机原生目录选择（复用官方 native 后端，跨平台）
+ * dsh-access-gate — 本机原生目录选择（复用官方 native 后端，跨平台）
  *
  * 通过 loader 动态挂载官方 `@deepseek-ai/dsh-host-directory-picker-native`
  * 包到 isolate 作用域（directoryPicker 服务隔离，与 root 的 browse 后端

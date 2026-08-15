@@ -1,5 +1,5 @@
 /**
- * dsh-auth-gate — DSH 远程访问认证门禁（核心实现）
+ * dsh-access-gate — DSH 远程访问认证门禁（核心实现）
  *
  * ── 背景 ────────────────────────────────────────────────────────────────
  * DSH 的 `/api` 浏览器信任护栏（@deepseek-ai/dsh-client-connection 的
@@ -67,7 +67,7 @@ import { mountNativePicker, type NativePicker } from "./native-picker.js";
 import type { AuthGateConfig, PluginContext } from "./types.js";
 
 /** 稳定插件名（bundle patch 的 name 字段引用它）。 */
-export const name = "dsh-auth-gate";
+export const name = "dsh-access-gate";
 /** 需要 webServer（路由/emit 拦截）、loader（官方 native 后端）、credentials（密码）就绪。 */
 export const inject = ["webServer", "loader", "credentials"];
 
@@ -496,5 +496,5 @@ export async function apply(ctx: PluginContext, config: AuthGateConfig = {}): Pr
 		server.emit = originalEmit;
 	}, "auth-gate: restore server.emit");
 
-	ctx.logger?.info?.(`dsh-auth-gate: 已启用（密码：${passwordHash === null ? "未配置，远程直接放行" : "已配置，远程需认证"}；${trustedRemotePrefixes.length} 个免密网段；本机原生目录选择；randomUUID polyfill）`);
+	ctx.logger?.info?.(`dsh-access-gate: 已启用（密码：${passwordHash === null ? "未配置，远程直接放行" : "已配置，远程需认证"}；${trustedRemotePrefixes.length} 个免密网段；本机原生目录选择；randomUUID polyfill）`);
 }

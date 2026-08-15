@@ -1,6 +1,6 @@
 import type { AuthGateConfig, PluginContext } from "./types.js";
 /** 稳定插件名（bundle patch 的 name 字段引用它）。 */
-export declare const name = "dsh-auth-gate";
+export declare const name = "dsh-access-gate";
 /** 需要 webServer（路由/emit 拦截）、loader（官方 native 后端）、credentials（密码）就绪。 */
 export declare const inject: string[];
 /** 访问密码的 credential 引用（设置界面 / 环境变量共用此名）。 */
