@@ -104,6 +104,8 @@ npm install            # 首次：安装 typescript / @types/node
 
 npm run typecheck      # 只做类型检查（改完代码先跑这个）
 npm run build          # 编译 src/ → lib/（含 .d.ts 与 sourcemap）
+npm run check:package  # 包组合验证（dsh.client 声明 / exports["./client"] /
+                       #   bundle patch —— 防止安装后启动失败，见 NOTES §12）
 npm run test:e2e       # 真机级 E2E（49 项断言，用本机真实 DSH 模块）
 
 # 部署到 DSH：改完 src 必须 build，然后重启 DSH 进程生效

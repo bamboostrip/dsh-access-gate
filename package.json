@@ -1,11 +1,21 @@
 {
   "name": "dsh-auth-gate",
-  "version": "0.3.0",
-  "description": "DSH plugin: authenticate remote (non-loopback) /api access with a password gate, unblock the loopback-pinned privileged endpoints, restore everything on uninstall, and give the local 127.0.0.1 user the native OS folder picker for workspace selection. Zero residue by design. TypeScript source, compiled output.",
+  "version": "0.4.0",
+  "description": "DSH plugin: password gate for remote (non-loopback) /api access (passwordless by default), unblock the loopback-pinned privileged endpoints, restore everything on uninstall, and give the local 127.0.0.1 user the native OS folder picker for workspace selection. Zero residue by design. TypeScript source, compiled output.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "lib",
     "src",
@@ -29,7 +39,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:e2e": "node test/e2e-gate.mjs"
+    "test:e2e": "node test/e2e-gate.mjs",
+    "check:package": "node test/check-package.mjs"
   },
   "dsh": {
     "bundle": {
