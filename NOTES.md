@@ -162,7 +162,7 @@ E2E 测试 `test/e2e-gate.mjs` 保持 JS：它测的是**编译产物**（`lib/i
 
 ## 6. 验证
 
-### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，40/40 通过）
+### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，46/46 通过）
 
 用**本机安装的真实 DSH 模块**搭隔离实例（随机端口，不碰线上 3080 实例）：
 `@deepseek-ai/cordis` Context + `dsh-host-webserver`（真实 node:http server）+
@@ -196,6 +196,8 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
 | 16 | `DSH_GATE_PASSWORD` 环境变量回退（config.password 缺省）→ 登录可用 | PASS |
 | 17 | 本机 `/-/gate/pick-directory` → 200 `{path:null}`（test 模式模拟取消） | PASS |
 | 18 | 远程 pick-directory：未认证 302（gate 拦）、带 cookie 403（路由内回环钉死） | PASS |
+| 19 | **真实 loader 挂载官方 native 后端**：store 出现官方包 entry，`capability.kind === "native"`（跨平台实现就位） | PASS |
+| 20 | index 注入 randomUUID polyfill + 幂等守卫（替代 lan-access 职责） | PASS |
 
 ### 6.2 部署日真机验收清单（真实 nginx + 公网域名，逐项测）
 
@@ -214,10 +216,12 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
    应回到 403（护栏还原），`profiles/web` 下无本插件残留文件。
    ⚠️ 仅此条必须在真实实例上做（依赖 `dsh plugin` 的包管理流程）。
 7. **本机添加工作区弹 OS 原生对话框**（v0.3.0 新功能）：本机用
-   `http://127.0.0.1:3080` 打开 → 添加工作区 → 应弹出 Windows 原生
-   "Select Workspace Directory" 文件夹选择框；选中路径 → 工作区创建成功。
-   远程（公网域名）添加工作区 → 仍是应用内 Miller 浏览器。⚠️ 真实弹窗
-   只能在真机验证（自动化无法交互）；E2E 只覆盖了路由门禁与 test 模式。
+   `http://127.0.0.1:3080` 打开 → 添加工作区 → 应弹出**官方原生**目录
+   选择框（win32 新式 IFileOpenDialog / darwin choose folder /
+   linux zenity-kdialog，与官方 auto 在 loopback 绑定时一致）；选中路径 →
+   工作区创建成功。远程（公网域名）添加工作区 → 仍是应用内 Miller 浏览器。
+   ⚠️ 真实弹窗只能在真机验证（自动化无法交互）；E2E 已覆盖路由门禁 +
+   真实 loader 挂载官方包 + capability.kind === "native"。
 
 ### 6.3 本机安装测试步骤（开发循环）
 
@@ -269,9 +273,16 @@ dsh web      # 或 dsh --profile web
 
 - **host 侧**：注册 exact 路由 `/-/gate/pick-directory`（`src/index.ts`）：
   仅回环来源（路由内二次钉死，gate 之外再拦一次）；客户端断开自动 abort
-  （杀掉对话框进程）。对话框实现 `src/native-picker.ts`：
-  Windows 自带 `powershell.exe -STA` + `System.Windows.Forms.FolderBrowserDialog`
-  （UTF-8 输出防中文路径乱码；取消 → null）。
+  （传给官方 pick 的 signal，官方会关对话框/杀子进程）。
+- **官方实现复用**（`src/native-picker.ts`）：`mountNativePicker()` 用
+  `ctx.loader.create({ name: "@deepseek-ai/dsh-host-directory-picker-native",
+  isolate: { directoryPicker: "dsh-auth-gate:native" } })` 把官方 native
+  后端动态挂到**隔离 realm**（directoryPicker 服务与 root 的 browse 后端
+  共存不冲突），取 `capability().pick(signal)` 弹对话框 —— 与官方 auto
+  在 loopback 绑定时给出的交互完全一致：
+  - win32：koffi + worker 子进程弹新式 IFileOpenDialog；
+  - darwin：osascript "choose folder"；
+  - linux：zenity / kdialog（与 auto 的探测条件一致）。
 - **client 侧**：`src/client.js`（构建复制到 lib/）注册 priority -1 的
   "智能 flow" 到两个 directoryFlow slot（官方 UI 默认 priority 0，shadowing
   规则最低者渲染）：
@@ -282,24 +293,25 @@ dsh web      # 或 dsh --profile web
 - **不需要动 auto / web-app 组合**：auto 仍按绑定判定挂 browse 后端（远程
   必需），壳只负责本机场景的"加料"。
 
-### 8.3 为什么自实现 PowerShell 而不是调官方 native 后端
+### 8.3 为什么用 loader 动态挂载而不是 node import
 
 - 第三方插件**无法 import 官方包**：`profiles/web/node_modules` 是独立 pnpm
   布局，没有 `@deepseek-ai` 树（DSH 的包在 fnm 安装树里），node 解析不到；
-- loader 动态挂载官方 native 包到 isolate realm（`loader.create({name,
-  isolate: {directoryPicker: ...}})`）可复用官方 koffi 新式对话框，但依赖
-  loader 内部生命周期 API，随 DSH 升级易碎 —— 记为备选（§8.4）；
-- PowerShell FolderBrowserDialog：Windows 自带、零 npm 依赖、零 loader 介入、
-  卸载零残留。代价：老式对话框外观、无属主窗口（不置顶）、Windows only。
+- loader 的模块解析（ModuleLoader + ctx.baseUrl）从 DSH 安装树解析官方包
+  —— 官方 `directory-picker-auto` 正是用 `ctx.loader.create` 动态挂载官方
+  包的（同一官方 API，`cordis-plugin-loader` 的 create/remove/store）；
+- 挂载是 **lazy**（首次 pick 时）且失败不致命：官方包解析/挂载失败 → 路由
+  返回 500 → 客户端壳 onError 显示；认证门禁不受影响；
+- 卸载零残留：entry 随插件卸载 `ctx.loader.remove(id)`。
 
 ### 8.4 已知限制 / 待办
 
-- 仅 win32 实现（`src/native-picker.ts` 对其他平台返回错误，壳会走 onError；
-  远程场景不受影响——abdicate 降级 browse）；
+- 官方 native 后端要求有桌面会话（与 auto 的 native 判定条件一致）：无显示
+  会话的环境（SSH 转发、无头服务器）弹不出对话框 —— 这类环境 auto 本来就
+  选 browse，本插件壳在本机仍会尝试 pick（会报错），后续可加"探测可用性后
+  降级"（TODO）；
 - 对话框无超时：用户不操作则请求一直挂起（与官方 native 行为一致）；
-- 备选方案：DSH 升级后若官方对话框体验变化，可切到 loader isolate 动态挂载
-  官方 native 后端（复用 koffi 新式 IFileOpenDialog）；
-- 真机验收：见 §6.2 第 7 条。
+- 真机验收：见 §6.2 第 7 条（win32 弹 koffi 新式对话框；mac/linux 同理）。
 
 ## 9. 替代 dsh-lan-access（v0.3.0）
 
@@ -331,7 +343,7 @@ dsh web      # 或 dsh --profile web
 | bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-auth-gate |
 | profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-auth-gate |
 | 登录 token Map | 进程内存 | 进程退出即消失 |
-| PowerShell 对话框子进程 | abort / 进程退出 | 无孤儿 powershell 进程 |
+| 官方 native picker loader entry | `ctx.loader.remove(id)`（插件清理回调） | `profiles/web` 无残留；进程内无孤儿对话框 worker |
 
 不触碰：用户 `cordis.patch.yml`、DSH 源码、任何用户配置文件（密码走环境变量）。
 注：若同时卸载了 dsh-lan-access，webserver 绑定恢复 127.0.0.1（DSH 默认）——
@@ -339,11 +351,13 @@ dsh web      # 或 dsh --profile web
 
 ## 11. 本地 git（2026-08-15 初始化）
 
-- `git init -b main`，首次提交 `c9f6f7c`（v0.3.0 全量）；
+- `git init -b main`，提交记录：`c9f6f7c`（v0.3.0 全量）、`5aa2caf`（文档）；
 - 仓库级身份：`bamboostrip <55238760+bamboostrip@users.noreply.github.com>`
-  （GitHub noreply，从 gh CLI 账号派生；推送前如需真实邮箱自行
-  `git config user.email`）；
+  —— SSH 连通性已实测确认：GitHub 认证为 `bamboostrip`、Gitee 为
+  `hank(@bamboostrip)`（`~/.ssh` 配置了 github/gitee/gitea.famlife.top 三个
+  key）；推送前如需真实邮箱自行 `git config user.email`；
 - `.gitignore`：node_modules / *.tsbuildinfo；**lib/ 是构建产物但必须提交**
   （`dsh plugin add link:` 装上即用的前提）；
-- 推送流程：真机验收通过 → `git add -A && git commit` → 建 GitHub 仓库 →
-  `git remote add origin ...` → `git push -u origin main`。
+- 推送流程：真机验收通过 → `git add -A && git commit` → 建远程仓库
+  （GitHub：gh 已认证，`gh repo create`；或 Gitee / 自建 gitea.famlife.top）
+  → `git remote add origin <ssh-url>` → `git push -u origin main`。

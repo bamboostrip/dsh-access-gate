@@ -24,6 +24,6 @@
 - insert:
     - id: auth-gate
       name: 'dsh-auth-gate'
-      inject: [webServer]
+      inject: [webServer, loader]
       config:
         password: !!js process.env.DSH_GATE_PASSWORD

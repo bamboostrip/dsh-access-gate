@@ -72,15 +72,57 @@ export interface PluginContext {
 	/** 因 inject: [webServer]，此处非可选。 */
 	webServer: WebServerService;
 	/**
-	 * 注册 fiber 清理回调。本插件用法：`ctx.effect(() => () => { ...还原... }, name)`。
-	 * 卸载/停用/热更新时执行返回的 disposer。
+	 * 因 inject: [loader]，此处非可选（cordis-plugin-loader 提供的服务）。
+	 * 用于动态挂载官方 native 目录选择后端到 isolate 作用域（见 native-picker.ts）。
 	 */
-	effect<T extends () => unknown>(callback: () => T, name?: string): ReturnType<T>;
+	loader: LoaderService;
+	/**
+	 * 注册 fiber 清理回调。三种用法：
+	 *   - `ctx.effect(() => disposer, name)`：callback 返回清理函数（同步）；
+	 *   - `ctx.effect(async () => { ...; return disposer; }, name)`：callback
+	 *     可异步，resolve 出的函数作为 disposer（官方 auto 的用法）；
+	 *   - `ctx.effect(() => value, name)`：注册值型副作用（如路由 disposer）。
+	 * 卸载/停用/热更新时按注册逆序执行 disposer。
+	 */
+	effect<T>(callback: () => T | Promise<T>, name?: string): T;
 	/** 内置 logger（cordis 核心自带，可选访问以防未来移除）。 */
 	logger?: {
 		info?(message: string): void;
 		warn?(message: unknown): void;
 	};
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// loader 服务契约（cordis-plugin-loader）
+// 出处：@deepseek-ai/cordis-plugin-loader/lib/index.js
+//   - Loader extends EntryTree：L658；构造时 ctx.reflect.provide("loader", ...) L674
+//   - EntryGroup.create(options) → 返回 entry.id（L48-62）
+//   - EntryGroup.remove(id)（L68-75）；EntryTree.store[id] → Entry（L51）
+//   - Entry.ctx：loader.ctx.extend(...)（L338）；Entry.fiber：插件 fiber（L329）
+//   - isolate 选项：entry.options.isolate → 服务隔离 realm（isolate.js L577-650，
+//     字符串 label = 共享 GlobalRealm，true = entry 私有 LocalRealm）
+// ────────────────────────────────────────────────────────────────────────
+
+export interface LoaderService {
+	/** 创建（或复用）一个 loader entry，返回其 id；加载完成才 resolve。 */
+	create(options: { name: string; isolate?: Record<string, string> }): Promise<string>;
+	/** 卸载 entry（dispose fiber + 移除）。 */
+	remove(id: string): Promise<void>;
+	/** id → Entry 表。 */
+	store: Record<string, LoaderEntry>;
+}
+
+export interface LoaderEntry {
+	ctx: PluginContext & { directoryPicker?: DirectoryPickerService };
+}
+
+/** directoryPicker seam 能力（官方 dsh-host-directory-picker 的 capability 判别联合）。 */
+export type DirectoryPickerCapability =
+	| { kind: "native"; pick(signal?: AbortSignal): Promise<string | null> }
+	| { kind: "browse"; list(path: string | undefined, signal?: AbortSignal): Promise<unknown>; createDirectory(path: string, name: string): Promise<string> };
+
+export interface DirectoryPickerService {
+	capability(): DirectoryPickerCapability;
 }
 
 // ────────────────────────────────────────────────────────────────────────

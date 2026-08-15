@@ -53,8 +53,9 @@ $env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
 - 登录态存在内存：DSH 进程重启后需重新登录。
 - **本机添加工作区弹 OS 原生目录对话框**（v0.3.0）：即使因 `dsh-lan-access`
   绑定 0.0.0.0 导致官方 auto 选择器固定为应用内浏览，本机（127.0.0.1 /
-  localhost）添加工作区时仍会弹出 Windows 原生文件夹选择框；远程访问时
-  自动降级回官方应用内浏览器，体验不变。详见 `NOTES.md` §8。
+  localhost）添加工作区时仍会弹出**官方原生**目录选择框（Windows 新式
+  IFileOpenDialog / macOS choose folder / Linux zenity-kdialog，跨平台）；
+  远程访问时自动降级回官方应用内浏览器，体验不变。详见 `NOTES.md` §8。
 
 ## 可选配置（在 cordis.patch.yml 覆盖 auth-gate 行）
 
@@ -97,7 +98,7 @@ npm install            # 首次：安装 typescript / @types/node
 
 npm run typecheck      # 只做类型检查（改完代码先跑这个）
 npm run build          # 编译 src/ → lib/（含 .d.ts 与 sourcemap）
-npm run test:e2e       # 真机级 E2E（40 项断言，用本机真实 DSH 模块）
+npm run test:e2e       # 真机级 E2E（46 项断言，用本机真实 DSH 模块）
 
 # 部署到 DSH：改完 src 必须 build，然后重启 DSH 进程生效
 ```

@@ -8,7 +8,7 @@
  * 完整跑通。请求来源用本机 LAN IP（10.144.144.7）模拟"非回环远程"，用 127.0.0.1
  * 模拟本机直连。
  *
- * 运行：node test/e2e-gate.mjs   （Node ≥ 22；40 项断言）
+ * 运行：node test/e2e-gate.mjs   （Node ≥ 22；46 项断言）
  * 依赖：本机 DSH 安装路径（见 DSH_MODULES），与 NOTES.md 第 2 节相同。
  * 注意：改 src/*.ts 后先 npm run build，本测试测的是构建产物。
  */
@@ -23,6 +23,7 @@ const DSH_MODULES = "C:/Users/Bambo/AppData/Roaming/fnm/node-versions/v24.18.0/i
 const toUrl = (p) => pathToFileURL(p).href;
 const { Context } = await import(toUrl(`${DSH_MODULES}/cordis/lib/index.js`));
 const { default: WebServer } = await import(toUrl(`${DSH_MODULES}/dsh-host-webserver/lib/index.js`));
+const { default: Loader } = await import(toUrl(`${DSH_MODULES}/cordis-plugin-loader/lib/index.js`));
 const connection = await import(toUrl(`${DSH_MODULES}/dsh-client-connection/lib/index.js`));
 const gate = await import("../lib/index.js");
 
@@ -75,6 +76,11 @@ const fakeApiProxyPlugin = {
 async function setup({ withGate, gateConfig }) {
 	const ctx = new Context();
 	await ctx.plugin(WebServer, { host: "0.0.0.0", port: 0 });
+	// 真实 loader 服务（cordis-plugin-loader）：gate 插件 inject 需要它，
+	// 且 pick 路由通过它动态挂载官方 native 后端（真实验证，见用例 20b）。
+	// baseUrl 指向 DSH 树：官方包的裸名从此解析（真实 DSH 环境的 loader
+	// 由 dsh-app-boot 配置了同样的解析锚点）。
+	new Loader(ctx, { baseUrl: toUrl(DSH_MODULES) + "/" });
 	await ctx.plugin(fakeApiProxyPlugin);
 	await ctx.plugin(connection, { trustedHosts: [], maxRequestBodyBytes: 16 * 1024 * 1024 });
 	if (withGate) await ctx.plugin(gate, gateConfig ?? { password: "s3cret-pass-123", tokenTtlMs: 3600_000 });
@@ -297,6 +303,15 @@ let cookie = "";
 	check("[gated] 远程未认证 pick-directory → 302（gate 拦截）", r12.status, 302);
 	const r13 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/-/gate/pick-directory", headers: { cookie } });
 	check("[gated] 远程带cookie pick-directory → 403（路由内回环钉死）", r13.status, 403);
+
+	// 20b. 真实 loader 挂载官方 native 后端（isolate realm）—— 上一步已触发 lazy 挂载
+	const nativeEntries = Object.entries(gated.ctx.loader.store).filter(([, e]) => e.ctx?.directoryPicker !== undefined);
+	check("[gated] loader 已挂载官方 native 后端 entry", nativeEntries.length, (n) => n >= 1);
+	if (nativeEntries.length > 0) {
+		const capability = nativeEntries[0][1].ctx.directoryPicker.capability();
+		check("[gated] 挂载的 capability.kind === native（官方实现，跨平台）", capability.kind, "native");
+		check("[gated] capability 提供 pick 函数", typeof capability.pick, "function");
+	}
 
 	// 21. randomUUID polyfill 注入（替代 dsh-lan-access 的职责）
 	const r14 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "GET", path: "/", headers: { cookie } });

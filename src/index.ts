@@ -54,13 +54,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { pickDirectory } from "./native-picker.js";
+import { mountNativePicker, type NativePicker } from "./native-picker.js";
 import type { AuthGateConfig, PluginContext } from "./types.js";
 
 /** 稳定插件名（bundle patch 的 name 字段引用它）。 */
 export const name = "dsh-auth-gate";
-/** 需要 webServer 服务就绪后才能注册拦截。 */
-export const inject = ["webServer"];
+/** 需要 webServer（路由/emit 拦截）与 loader（动态挂载官方 native 后端）就绪。 */
+export const inject = ["webServer", "loader"];
 
 /** 登录页/登录接口路径（放在 DSH 不会使用的 /-/ 前缀下）。 */
 const LOGIN_PATH = "/-/auth/login";
@@ -388,8 +388,19 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 	} as ServerEmit;
 
 	// 本机原生目录选择路由：仅回环来源可用（远程走官方 browse，见 NOTES §8）。
-	// 供客户端壳组件调用 —— 弹 OS 目录对话框让本机用户直接选工作区目录，
+	// 供客户端壳组件调用 —— 弹官方原生 OS 目录对话框（loader 动态挂载官方
+	// native 后端，win32 koffi / darwin osascript / linux zenity-kdialog）。
 	// 绕开"auto 因 0.0.0.0 绑定固定选 browse"的限制（根因见 NOTES §8.1）。
+	let nativePickerPromise: Promise<NativePicker> | null = null;
+	const getNativePicker = () => {
+		if (nativePickerPromise === null) {
+			nativePickerPromise = mountNativePicker(ctx).catch((error) => {
+				nativePickerPromise = null;
+				throw error;
+			});
+		}
+		return nativePickerPromise;
+	};
 	const pickRoute = ctx.webServer.register({
 		kind: "exact",
 		path: PICK_PATH,
@@ -406,12 +417,15 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 				return;
 			}
 			const controller = new AbortController();
-			// 客户端断开（fetch abort / 页面关闭）→ 杀掉对话框进程。
+			// 客户端断开（fetch abort / 页面关闭）→ 关闭对话框（官方 pick 支持 abort）。
 			req.on("close", () => {
 				if (!res.writableEnded) controller.abort();
 			});
 			try {
-				const path = await pickDirectory(controller.signal);
+				const picker = await getNativePicker();
+				let path: string | null = null;
+				// 测试模式：不弹真实对话框（自动化环境无法交互），模拟用户取消。
+				if (process.env.DSH_GATE_PICKER_TEST !== "1") path = await picker.pick(controller.signal);
 				if (res.writableEnded) return;
 				res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
 				res.end(JSON.stringify({ path }));
@@ -423,6 +437,11 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 		}
 	});
 	ctx.effect(() => pickRoute, "auth-gate: native pick route");
+	// 卸载时卸下官方 native picker entry（若已挂载）。
+	ctx.effect(async () => {
+		const picker = await nativePickerPromise?.catch(() => null);
+		await picker?.dispose();
+	}, "auth-gate: native picker entry");
 
 	// randomUUID polyfill 注入（每次 index.html 响应时应用；幂等守卫防重复）。
 	const removePolyfill = ctx.webServer.tapIndex((html) =>
