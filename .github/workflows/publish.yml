@@ -1,0 +1,50 @@
+name: Publish to npm
+
+# 推送 v* 标签（如 v0.5.0）时自动发布到 npm（OIDC 可信发布，无需 token）。
+# 发布流程见仓库根目录 RELEASE.md。
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # OIDC 可信发布 / provenance 必需：GitHub 用短期 OIDC 身份向 npm 认证，
+      # 不需要 NPM_TOKEN，也不受账号 2FA 影响。
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+
+      - name: Verify tag matches package version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::git tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package composition check
+        run: npm run check:package
+
+      # OIDC 可信发布：包必须在 npmjs.com 配置了本仓库的信任（见 RELEASE.md）。
+      # 如需改用 token 方式，在 GitHub Secrets 加 NPM_TOKEN 并取消下面两行注释：
+      # env:
+      #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm
+        run: npm publish --provenance
