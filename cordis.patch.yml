@@ -1,0 +1,29 @@
+# dsh-auth-gate bundle patch — 在 web 组合层挂载本插件的代码行。
+#
+# 设计原则：本文件是包的一部分（安装时随包进入 profiles/web/node_modules，
+# 卸载时随包一起消失），因此这里写配置不会污染用户的 cordis.patch.yml。
+#
+# 密码通过环境变量注入（推荐），这样用户配置文件里永远不出现明文密码：
+#   DSH_GATE_PASSWORD=your-password
+# 也可以直接写在 config.password（不推荐，会明文落盘）。
+#
+# 其他可选配置项（全部有默认值，见 src/index.ts 顶部注释）：
+#   trustedRemotePrefixes: ['10.144.144.0/24']   # 内网网段免密
+#   tokenTtlMs: 604800000                        # 登录有效期，默认 7 天
+
+# 1) 绑定 0.0.0.0（替代 dsh-lan-access 的职责之一）：
+#    不绑全接口则 nginx 无法转发进来。与 dsh-lan-access 同款覆盖，
+#    两者同时安装时值相同、无冲突；卸载 lan-access 后本行继续生效。
+- id: webserver
+  config:
+    host: 0.0.0.0
+    port: !!js ctx.webStartup.port ?? 3080
+
+# 2) 挂载本插件的代码行（host 半边：认证门禁 + 本机原生选择器路由 +
+#    randomUUID polyfill 注入；client 半边：智能目录选择 flow）。
+- insert:
+    - id: auth-gate
+      name: 'dsh-auth-gate'
+      inject: [webServer]
+      config:
+        password: !!js process.env.DSH_GATE_PASSWORD

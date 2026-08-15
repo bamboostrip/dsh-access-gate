@@ -1,0 +1,50 @@
+{
+  "name": "dsh-auth-gate",
+  "version": "0.3.0",
+  "description": "DSH plugin: authenticate remote (non-loopback) /api access with a password gate, unblock the loopback-pinned privileged endpoints, restore everything on uninstall, and give the local 127.0.0.1 user the native OS folder picker for workspace selection. Zero residue by design. TypeScript source, compiled output.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "NOTES.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek-harness-plugin",
+    "auth",
+    "gate",
+    "remote-access",
+    "公网",
+    "认证",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "node test/e2e-gate.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}

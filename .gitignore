@@ -1,0 +1,10 @@
+# 依赖
+node_modules/
+*.tsbuildinfo
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+
+# 注意：lib/ 是 tsc 构建产物，但必须提交/保留 ——
+# dsh plugin add file: 安装的是目录，装上就能跑的前提是 lib/index.js 已构建。
