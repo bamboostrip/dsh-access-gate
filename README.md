@@ -29,15 +29,15 @@ dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 # dsh plugin --profile web add dsh-auth-gate
 ```
 
-设置访问密码（二选一）：
+重启 DSH 服务生效。**默认无密码**：远程直接可访问（等价纯 lan-access）。
+设置访问密码两种方式（二选一）：
 
 ```sh
-# 推荐：环境变量，不落盘
+# ① 推荐：设置界面 → 插件配置 → 访问认证 卡片，输入密码保存
+#    （写入 ~/.dsh/.credentials.yaml；改后实时生效，无需重启）
+# ② 环境变量（优先于文件层，适合脚本/CI）：
 $env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
-# 或：在 profiles/web/cordis.patch.yml 覆盖 auth-gate 行配置
 ```
-
-然后重启 DSH 服务生效。
 
 > **替代 dsh-lan-access**：本插件已覆盖它的全部职责（0.0.0.0 绑定 +
 > `crypto.randomUUID` polyfill），验证通过后可
@@ -45,9 +45,9 @@ $env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
 
 ## 使用
 
-- 本机访问 `http://127.0.0.1:3080`：免密，行为与未装插件完全一致。
-- 远程访问（公网域名 / 局域网 IP）：首次任意请求会 302 到登录页，输入密码后
-  种下 HttpOnly Cookie，之后 7 天内免登录（有效期可配）。
+- **默认无密码**：远程（公网域名 / 局域网 IP）直接访问，与未装认证层一致。
+- **设置了密码**：本机 `http://127.0.0.1:3080` 免密；远程首次访问 302 到
+  登录页，输入密码后种下 HttpOnly Cookie，7 天内免登录（有效期可配）。
 - nginx 与 DSH 同机时（remote 恒为 127.0.0.1 但 Host 是域名）同样需要密码，
   登录后正常使用 —— 公网流量无法绕过认证。
 - 登录态存在内存：DSH 进程重启后需重新登录。
@@ -62,7 +62,11 @@ $env:DSH_GATE_PASSWORD='你的密码'   # PowerShell；重启 DSH 生效
 ```yaml
 - id: auth-gate
   config:
-    password: '你的密码'                    # 或走 DSH_GATE_PASSWORD 环境变量
+    # password: 'xxx'                        # 可选：行配置密码（最高优先；
+    #                                        #   缺省走 credentials 域：
+    #                                        #   环境变量 DSH_GATE_PASSWORD
+    #                                        #   > ~/.dsh/.credentials.yaml；
+    #                                        #   两者皆无 = 默认无密码放行）
     trustedRemotePrefixes: ['10.144.144.0/24']   # 内网网段免密（IPv4 CIDR）
     tokenTtlMs: 604800000                  # 登录有效期，默认 7 天
 ```
@@ -74,17 +78,19 @@ dsh plugin --profile web remove dsh-auth-gate
 ```
 
 卸载后：包与 bundle patch 一起移除（webserver 绑定还原 DSH 默认、polyfill
-停止注入），`server.emit` 拦截器、原生选择器路由、客户端智能 flow 全部随
-`ctx.effect` 清理回调还原，登录态随进程退出消失。插件不修改任何 DSH 源码、
-不写入用户配置文件。完整审计清单见 `NOTES.md` §10。
+停止注入），`server.emit` 拦截器、原生选择器路由、客户端智能 flow 与设置
+卡片全部随 `ctx.effect` 清理回调还原，登录态随进程退出消失。插件不修改任何
+DSH 源码、不写入用户配置文件（密码若通过设置界面配置过，留在
+`~/.dsh/.credentials.yaml` —— 那是 DSH 官方凭据库，卸载插件后该条目保留，
+可用设置界面"移除密码"或直接编辑该文件清除）。完整审计清单见 `NOTES.md` §10。
 
 ## 安全提示
 
 - 本插件提供的是"密码门禁"，不是 TLS 之外的身份体系；请务必配合 nginx 的
   HTTPS（已有）使用，防止密码与 Cookie 明文传输。
-- 认证通过后放行的等价于本机操作权限（DSH 本身是远程执行工具），密码务必
-  强随机、独立于其他服务。
-- 建议 nginx 层再加 IP 白名单 / Basic Auth 双保险。
+- **默认无密码时，远程访问等价于本机操作权限**（DSH 本身是远程执行工具）。
+  公网暴露前请在设置界面配置强密码，并建议 nginx 层再加 IP 白名单 /
+  Basic Auth 双保险。
 - 登录接口无失败次数限制（TODO：可加简单限速）。
 
 ## 开发
@@ -98,7 +104,7 @@ npm install            # 首次：安装 typescript / @types/node
 
 npm run typecheck      # 只做类型检查（改完代码先跑这个）
 npm run build          # 编译 src/ → lib/（含 .d.ts 与 sourcemap）
-npm run test:e2e       # 真机级 E2E（46 项断言，用本机真实 DSH 模块）
+npm run test:e2e       # 真机级 E2E（49 项断言，用本机真实 DSH 模块）
 
 # 部署到 DSH：改完 src 必须 build，然后重启 DSH 进程生效
 ```

@@ -32,16 +32,25 @@
  *    完全放行，不干预 —— 本机体验与未装插件一致；
  * 2) 非回环来源命中 trustedRemotePrefixes（可选免密网段，IPv4 CIDR）：
  *    改写头放行；
- * 3) 其余一切 → 必须密码登录，登录后改写头放行。包括：
+ * 3) 未配置密码（放行模式）→ 其余一切改写头直接放行（等价纯 lan-access）；
+ * 4) 配置了密码 → 其余一切必须密码登录，登录后改写头放行。包括：
  *    a. 公网域名 / 局域网 IP 来源（nginx 在不同机器）；
  *    b. 回环来源但 Host 是域名 —— 即 nginx 与 DSH 同机的反代拓扑。若放行则
  *       公网流量可绕过密码（remote 恒为 127.0.0.1），故必须认证；
  *    c. 非回环来源伪造 Host: 127.0.0.1 —— 护栏不查 socket 地址，这种请求
  *       本来能直接穿护栏，现在被门禁挡住（认证是唯一门槛）。
  *
+ * ── 密码策略（默认无密码，v0.4.0）───────────────────────────────────────
+ * - 未配置密码 → 放行模式：所有非本机请求改写头放行（等价纯 lan-access，
+ *   远程直接可访问）；配置了密码 → 除本机直连外全部要求认证；
+ * - 密码来源：config.password > credentials 域（进程环境变量
+ *   DSH_GATE_PASSWORD > ~/.dsh/.credentials.yaml > .env）。设置界面
+ *   （插件配置 → 访问认证卡片）可配置/清除密码，经 credentials/updated
+ *   实时生效，无需重启；
+ * - 登录态在内存：进程重启需重新登录。
+ *
  * ── 已知边界（详见 NOTES.md §5）─────────────────────────────────────────
  * - 登录接口无限速（TODO）；
- * - 登录态在内存：进程重启需重新登录；
  * - 免密网段仅支持 IPv4 CIDR；
  * - cookie 未加 Secure（兼容 LAN 明文 HTTP 直连场景），务必配合 HTTPS 使用。
  *
@@ -59,8 +68,11 @@ import type { AuthGateConfig, PluginContext } from "./types.js";
 
 /** 稳定插件名（bundle patch 的 name 字段引用它）。 */
 export const name = "dsh-auth-gate";
-/** 需要 webServer（路由/emit 拦截）与 loader（动态挂载官方 native 后端）就绪。 */
-export const inject = ["webServer", "loader"];
+/** 需要 webServer（路由/emit 拦截）、loader（官方 native 后端）、credentials（密码）就绪。 */
+export const inject = ["webServer", "loader", "credentials"];
+
+/** 访问密码的 credential 引用（设置界面 / 环境变量共用此名）。 */
+export const PASSWORD_REF = "DSH_GATE_PASSWORD";
 
 /** 登录页/登录接口路径（放在 DSH 不会使用的 /-/ 前缀下）。 */
 const LOGIN_PATH = "/-/auth/login";
@@ -232,22 +244,36 @@ ${error}
 
 /**
  * 插件入口。
- * @param ctx - plugin context；因 inject: [webServer]，ctx.webServer 可用。
+ * @param ctx - plugin context；inject: [webServer, loader, credentials]。
  * @param config - 行配置（见 src/types.ts AuthGateConfig）。
+ *
+ * 密码策略（默认无密码）：
+ *   - 未配置任何密码 → 放行模式：所有非本机请求改写头放行（等价纯
+ *     lan-access 行为，远程直接可访问）；
+ *   - 配置了密码 → 除本机直连（回环来源 + 回环 Host）外全部要求认证。
+ *   密码来源优先级：config.password > credentials 域
+ *   （进程环境变量 DSH_GATE_PASSWORD > ~/.dsh/.credentials.yaml > .env）；
+ *   设置界面改密码经 credentials/updated 事件实时生效，无需重启。
  */
-export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
-	const password = config.password || process.env.DSH_GATE_PASSWORD;
-	if (!password || password === "change-me") {
-		throw new Error(
-			"dsh-auth-gate: 未配置访问密码。请设置环境变量 DSH_GATE_PASSWORD，"
-			+ "或在 cordis.patch.yml 的 auth-gate 行配置 config.password。"
-		);
-	}
+export async function apply(ctx: PluginContext, config: AuthGateConfig = {}): Promise<void> {
 	const trustedRemotePrefixes: string[] = config.trustedRemotePrefixes ?? [];
 	const tokenTtlMs: number = config.tokenTtlMs ?? DEFAULT_TTL_MS;
-	const passwordHash = sha256Hex(password);
 	/** token → 过期时间戳。内存态：进程重启后需重新登录。 */
 	const tokens = new Map<string, number>();
+
+	/** 当前生效的密码哈希；null = 未配置密码（放行模式）。 */
+	let passwordHash: string | null = null;
+	const refreshPassword = async (): Promise<void> => {
+		const fromConfig = config.password;
+		const fromCredentials = fromConfig !== undefined ? undefined : (await ctx.credentials.resolve(PASSWORD_REF))?.value;
+		const password = fromConfig ?? fromCredentials;
+		passwordHash = password !== undefined && password !== "" && password !== "change-me" ? sha256Hex(password) : null;
+	};
+	await refreshPassword();
+	// 设置界面（或外部编辑 .credentials.yaml）改密码 → 实时生效。
+	ctx.on("credentials/updated", (ref) => {
+		if (ref === PASSWORD_REF) void refreshPassword();
+	});
 
 	const isAuthorized = (req: IncomingMessage): boolean => {
 		const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
@@ -295,7 +321,8 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 				const params = new URLSearchParams(body);
 				const next = params.get("next") ?? "/";
 				const safeNext = isSafeNext(next) ? next : "/";
-				if (!safeEqualHex(sha256Hex(params.get("password") ?? ""), passwordHash)) {
+				// passwordHash 为 null（放行模式）时 gateRequest 已短路；此处 ?? "" 保证永不匹配。
+				if (!safeEqualHex(sha256Hex(params.get("password") ?? ""), passwordHash ?? "")) {
 					try {
 						res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
 						res.end(renderLoginPage(safeNext, "密码错误"));
@@ -336,7 +363,12 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 			grantLoopback(req);
 			return "pass";
 		}
-		// 3) 其余一律要求认证。
+		// 2.5) 未配置密码 → 放行模式：改写头穿透护栏（等价纯 lan-access，远程直接访问）。
+		if (passwordHash === null) {
+			grantLoopback(req);
+			return "pass";
+		}
+		// 3) 密码模式：其余一律要求认证。
 		const url = new URL(req.url ?? "/", "http://dsh.internal");
 		if (url.pathname === LOGIN_PATH) {
 			return handleLogin(req, res, url) ? "handled" : "pass";
@@ -360,6 +392,10 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 		const remote = req.socket.remoteAddress ?? "";
 		if (isLoopbackRemote(remote) && isLoopbackAuthority(req.headers.host)) return "pass";
 		if (!isLoopbackRemote(remote) && trustedRemotePrefixes.some((cidr) => cidrMatch(remote, cidr))) {
+			grantLoopback(req);
+			return "pass";
+		}
+		if (passwordHash === null) {
 			grantLoopback(req);
 			return "pass";
 		}
@@ -454,5 +490,5 @@ export function apply(ctx: PluginContext, config: AuthGateConfig = {}): void {
 		server.emit = originalEmit;
 	}, "auth-gate: restore server.emit");
 
-	ctx.logger?.info?.(`dsh-auth-gate: 已启用（密码认证 + ${trustedRemotePrefixes.length} 个免密网段 + 本机原生目录选择 + randomUUID polyfill）`);
+	ctx.logger?.info?.(`dsh-auth-gate: 已启用（密码：${passwordHash === null ? "未配置，远程直接放行" : "已配置，远程需认证"}；${trustedRemotePrefixes.length} 个免密网段；本机原生目录选择；randomUUID polyfill）`);
 }

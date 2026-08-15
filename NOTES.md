@@ -141,6 +141,11 @@ E2E 测试 `test/e2e-gate.mjs` 保持 JS：它测的是**编译产物**（`lib/i
 
 ## 5. 已知边界 / 待决策
 
+0. **默认无密码（v0.4.0）**：未配置密码时远程直接放行（等价纯 lan-access）。
+   密码来源优先级：`config.password` > credentials 域（进程环境变量
+   `DSH_GATE_PASSWORD` > `~/.dsh/.credentials.yaml` > `.env`）。设置界面
+   （插件配置 → 访问认证卡片）配置/清除密码，经 `credentials/updated`
+   实时生效，无需重启。E2E 已验证（§6.1 第 20/21 条）。
 1. ~~**本机用域名访问会 403**~~ **已解决（实现为默认行为）**：现在门禁按
    "回环来源 **且** 回环 Host" 才放行；回环来源 + 域名 Host（= nginx 与 DSH
    同机的反代拓扑）同样走密码认证 + 头改写。这样同机 nginx 反代开箱即用，
@@ -155,14 +160,14 @@ E2E 测试 `test/e2e-gate.mjs` 保持 JS：它测的是**编译产物**（`lib/i
 5. 密码明文比较走 sha256 + timingSafeEqual，无明文日志。
 6. **护栏不查 socket 地址**（只读 header）：任何能连到端口的人发
    `Host: 127.0.0.1` 就能穿护栏（DSH 源码注释明说这是可达性策略非认证）。
-   本插件按 `req.socket.remoteAddress` 判定，非回环来源一律要密码，
-   顺带封掉了这个 Host 欺骗漏洞（E2E 第 15 条）。
+   本插件按 `req.socket.remoteAddress` 判定，非回环来源一律要密码（密码模式
+   下），顺带封掉了这个 Host 欺骗漏洞（E2E 第 15 条）。
 7. cookie 未加 `Secure`：兼容 LAN 明文 HTTP 直连（dsh-lan-access 场景）。
    公网部署务必 HTTPS（nginx 已配）。
 
 ## 6. 验证
 
-### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，46/46 通过）
+### 6.1 已通过：本机真机级 E2E（`test/e2e-gate.mjs`，49/49 通过）
 
 用**本机安装的真实 DSH 模块**搭隔离实例（随机端口，不碰线上 3080 实例）：
 `@deepseek-ai/cordis` Context + `dsh-host-webserver`（真实 node:http server）+
@@ -197,7 +202,10 @@ node test/e2e-gate.mjs     # 需本机 DSH 安装（路径见 §2），Node ≥ 
 | 17 | 本机 `/-/gate/pick-directory` → 200 `{path:null}`（test 模式模拟取消） | PASS |
 | 18 | 远程 pick-directory：未认证 302（gate 拦）、带 cookie 403（路由内回环钉死） | PASS |
 | 19 | **真实 loader 挂载官方 native 后端**：store 出现官方包 entry，`capability.kind === "native"`（跨平台实现就位） | PASS |
-| 20 | index 注入 randomUUID polyfill + 幂等守卫（替代 lan-access 职责） | PASS |
+| 20 | **默认无密码**：远程 POST（域名+Origin）→ 200、远程 WS → 101（放行模式，等价 lan-access） | PASS |
+| 21 | **设置密码实时生效**：`credentials.set` + updated 事件后（未重启）远程 → 302 | PASS |
+| 22 | 环境变量密码（`DSH_GATE_PASSWORD`，credentials env 层优先）→ 登录可用 | PASS |
+| 23 | index 注入 randomUUID polyfill + 幂等守卫（替代 lan-access 职责） | PASS |
 
 ### 6.2 部署日真机验收清单（真实 nginx + 公网域名，逐项测）
 
@@ -234,13 +242,15 @@ npm run build
 #    不用重新 add；file: 则会拷贝一份，改动需重新 add）
 dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 
-# 3) 设置密码（当前会话，不落盘）并重启 DSH
-$env:DSH_GATE_PASSWORD='你的强密码'
+# 3) 启动（默认无密码；或先设置密码再启动）
+$env:DSH_GATE_PASSWORD='你的强密码'   # 可选：环境变量方式（credentials env 层优先）
 dsh web      # 或 dsh --profile web
 
 # 4) 验证（对照 §6.2 清单）：
-#    - 本机 http://127.0.0.1:3080 免密全通；添加工作区弹原生对话框
-#    - 公网域名：302 → 登录页 → 密码 → 全通（页面/WS/特权接口/设置页）
+#    - 默认无密码：远程直接可访问（等价 lan-access）
+#    - 设置密码（设置界面 → 插件配置 → 访问认证，或环境变量）：
+#      本机 http://127.0.0.1:3080 免密全通；添加工作区弹原生对话框；
+#      公网域名：302 → 登录页 → 密码 → 全通（页面/WS/特权接口/设置页）
 #    - 卸载前先测：dsh plugin --profile web remove dsh-lan-access
 #      再重启 —— 绑定 0.0.0.0 与 randomUUID polyfill 由本插件接管后应无感
 
@@ -339,15 +349,17 @@ dsh web      # 或 dsh --profile web
 | `server.emit` 覆盖（门禁） | `ctx.effect` 还原（§"restore server.emit"） | 远程 POST `/api/host.describe` → 回到 403；`/-/auth/login` → 404 |
 | `/-/gate/pick-directory` 路由 | `register()` disposer → `ctx.effect` | POST 该路径 → 404 |
 | randomUUID polyfill 注入 | `tapIndex()` disposer → `ctx.effect` | GET `/` index.html 不含 `randomUUID` |
-| 客户端智能 flow（slot 注册） | slots.inject 的 disposer（随 client 插件卸载） | 添加工作区对话框 = 官方 auto 判定结果（无壳） |
+| 客户端智能 flow + 设置卡片（slot 注册） | slots.inject 的 disposer（随 client 插件卸载） | 添加工作区对话框 = 官方 auto 判定结果；设置界面无"访问认证"卡片 |
 | bundle patch（webserver 覆盖 + insert 行） | 随包移除后不再应用（loader 按 `dsh.profile.bundles` 应用） | `profiles/web/package.json` 的 bundles 无 dsh-auth-gate |
 | profile dependencies | `dsh plugin remove` = pnpm remove（官方机制） | `profiles/web/package.json` 无 dsh-auth-gate |
 | 登录 token Map | 进程内存 | 进程退出即消失 |
 | 官方 native picker loader entry | `ctx.loader.remove(id)`（插件清理回调） | `profiles/web` 无残留；进程内无孤儿对话框 worker |
 
-不触碰：用户 `cordis.patch.yml`、DSH 源码、任何用户配置文件（密码走环境变量）。
-注：若同时卸载了 dsh-lan-access，webserver 绑定恢复 127.0.0.1（DSH 默认）——
-公网不可达是卸载后的**预期还原**，不是残留。
+不触碰：用户 `cordis.patch.yml`、DSH 源码、任何用户配置文件。密码若经设置
+界面配置过，留在 `~/.dsh/.credentials.yaml`（DSH 官方凭据库，非本插件写入；
+卸载后可用设置界面"移除密码"或直接编辑该文件清除）。`credentials/updated`
+监听随插件 fiber 卸载。注：若同时卸载了 dsh-lan-access，webserver 绑定恢复
+127.0.0.1（DSH 默认）——公网不可达是卸载后的**预期还原**，不是残留。
 
 ## 11. 本地 git（2026-08-15 初始化）
 

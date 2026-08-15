@@ -8,7 +8,7 @@
  * 完整跑通。请求来源用本机 LAN IP（10.144.144.7）模拟"非回环远程"，用 127.0.0.1
  * 模拟本机直连。
  *
- * 运行：node test/e2e-gate.mjs   （Node ≥ 22；46 项断言）
+ * 运行：node test/e2e-gate.mjs   （Node ≥ 22；49 项断言）
  * 依赖：本机 DSH 安装路径（见 DSH_MODULES），与 NOTES.md 第 2 节相同。
  * 注意：改 src/*.ts 后先 npm run build，本测试测的是构建产物。
  */
@@ -72,8 +72,39 @@ const fakeApiProxyPlugin = {
 	}
 };
 
+// ── 假 credentials 服务（模拟 dsh-credentials-local 的层级与事件）─────────
+// 层级：进程环境变量（env，只读）> 内部 Map（file，可写）。
+function makeFakeCredentialsPlugin(init = {}) {
+	const values = new Map(Object.entries(init));
+	return {
+		name: "fake-credentials",
+		apply(ctx) {
+			ctx.provide("credentials", {
+				async resolve(ref) {
+					const fromEnv = process.env[ref];
+					if (fromEnv !== undefined) return { value: fromEnv, source: "env" };
+					const stored = values.get(ref);
+					return stored === undefined ? undefined : { value: stored, source: "file" };
+				},
+				async describe(ref) {
+					if (process.env[ref] !== undefined) return { configured: true, source: "env", writable: false };
+					return { configured: values.has(ref), source: values.has(ref) ? "file" : void 0, writable: true };
+				},
+				async set(ref, value) {
+					values.set(ref, value);
+					ctx.emit("credentials/updated", ref);
+				},
+				async unset(ref) {
+					values.delete(ref);
+					ctx.emit("credentials/updated", ref);
+				}
+			});
+		}
+	};
+}
+
 // ── 搭一个隔离实例 ────────────────────────────────────────────────────────
-async function setup({ withGate, gateConfig }) {
+async function setup({ withGate, gateConfig, credentialsInit }) {
 	const ctx = new Context();
 	await ctx.plugin(WebServer, { host: "0.0.0.0", port: 0 });
 	// 真实 loader 服务（cordis-plugin-loader）：gate 插件 inject 需要它，
@@ -81,9 +112,10 @@ async function setup({ withGate, gateConfig }) {
 	// baseUrl 指向 DSH 树：官方包的裸名从此解析（真实 DSH 环境的 loader
 	// 由 dsh-app-boot 配置了同样的解析锚点）。
 	new Loader(ctx, { baseUrl: toUrl(DSH_MODULES) + "/" });
+	await ctx.plugin(makeFakeCredentialsPlugin(credentialsInit));
 	await ctx.plugin(fakeApiProxyPlugin);
 	await ctx.plugin(connection, { trustedHosts: [], maxRequestBodyBytes: 16 * 1024 * 1024 });
-	if (withGate) await ctx.plugin(gate, gateConfig ?? { password: "s3cret-pass-123", tokenTtlMs: 3600_000 });
+	if (withGate) await ctx.plugin(gate, gateConfig ?? { tokenTtlMs: 3600_000 });
 	// 触发 webServer init（懒加载）并等待端口就绪
 	const server = ctx.webServer.server;
 	const port = await new Promise((resolve, reject) => {
@@ -182,10 +214,13 @@ const LAN = "10.144.144.7"; // 本机 LAN IP（模拟非回环远程来源）
 const LOCAL = "127.0.0.1";
 
 const base = await setup({ withGate: false });
-// 测试模式：pick 路由不弹真实 PowerShell 对话框（自动化环境无法交互），模拟取消。
+// 测试模式：pick 路由不弹真实对话框（自动化环境无法交互），模拟取消。
 process.env.DSH_GATE_PICKER_TEST = "1";
+// gated：默认无密码 → 先验证"放行模式"，再 set 密码验证"实时生效 + 密码模式"。
 const gated = await setup({ withGate: true });
-const gatedCidr = await setup({ withGate: true, gateConfig: { password: "s3cret-pass-123", trustedRemotePrefixes: ["10.144.144.0/24"] } });
+// gatedCidr：预置密码（免密网段在密码模式下仍应放行）。
+const gatedCidr = await setup({ withGate: true, gateConfig: { trustedRemotePrefixes: ["10.144.144.0/24"], tokenTtlMs: 3600_000 }, credentialsInit: { DSH_GATE_PASSWORD: "s3cret-pass-123" } });
+// gatedEnv：进程环境变量提供密码（credentials 的 env 层，模拟官方层级）。
 process.env.DSH_GATE_PASSWORD = "env-pass-456";
 const gatedEnv = await setup({ withGate: true, gateConfig: {} });
 delete process.env.DSH_GATE_PASSWORD;
@@ -217,34 +252,45 @@ console.log(`baseline :${base.port}  gated :${gated.port}  gated-cidr :${gatedCi
 	check("[baseline] 本机 WS /api/events.mux → 101", w2.statusLine, "HTTP/1.1 101 Switching Protocols");
 }
 
-// ========== 阶段 2：gated —— 门禁与头改写穿透护栏 ==========
+// ========== 阶段 2：gated —— 默认无密码放行 → 设置密码实时生效 → 密码模式 ==========
 let cookie = "";
 {
-	// 6. 远程未认证 GET / → 302 登录页
+	// 6. 默认无密码：远程直接放行（等价纯 lan-access）
+	const rFree = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json", origin: `https://${DOMAIN}` }, body: rpc("host.describe") });
+	check("[gated] 无密码：远程 POST host.describe（域名+Origin）→ 200", rFree, jsonOk);
+	const wFree = await wsUpgrade({ port: gated.port, via: LAN, path: "/api/events.mux", host: DOMAIN });
+	check("[gated] 无密码：远程 WS → 101", wFree.statusLine, "HTTP/1.1 101 Switching Protocols");
+
+	// 7. 设置密码（模拟设置界面保存 → credentials/updated 事件）→ 实时生效，无需重启
+	await gated.ctx.credentials.set("DSH_GATE_PASSWORD", "s3cret-pass-123");
+	const r0 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "GET", path: "/" });
+	check("[gated] 设置密码后（未重启）远程 GET / → 302 立即生效", r0.status, 302);
+
+	// 8. 远程未认证 GET / → 302 登录页
 	const r = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "GET", path: "/" });
 	check("[gated] 远程 GET /（未认证）→ 302", r.status, 302);
 	check("[gated] 302 Location 指向登录页", r.headers.location, strContains("/-/auth/login?next=%2F"));
 
-	// 7. 登录页 HTML
+	// 9. 登录页 HTML
 	const r2 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "GET", path: "/-/auth/login?next=/" });
 	check("[gated] 登录页 → 200 且含标题", r2, (x) => x.status === 200 && x.body.includes("DSH 访问认证"));
 
-	// 8. 错误密码 → 401
+	// 10. 错误密码 → 401
 	const bad = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/-/auth/login", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "password=wrong&next=/" });
 	check("[gated] 错误密码 → 401", bad.status, 401);
 
-	// 9. 正确密码 → 302 + Set-Cookie
+	// 11. 正确密码 → 302 + Set-Cookie
 	const good = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/-/auth/login", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "password=s3cret-pass-123&next=/" });
 	check("[gated] 正确密码 → 302", good.status, 302);
 	const setCookie = Array.isArray(good.headers["set-cookie"]) ? good.headers["set-cookie"][0] : String(good.headers["set-cookie"] ?? "");
 	check("[gated] Set-Cookie 带 HttpOnly+SameSite", setCookie, (s) => strContains("dsh_gate_token=")(s) && strContains("HttpOnly")(s) && strContains("SameSite=Lax")(s));
 	cookie = setCookie.split(";")[0];
 
-	// 10. 带 cookie 的远程 RPC（域名 Host + Origin + sec-fetch-site）→ 200 ← 核心证明
+	// 12. 带 cookie 的远程 RPC（域名 Host + Origin + sec-fetch-site）→ 200 ← 核心证明
 	const r3 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json", origin: `https://${DOMAIN}`, "sec-fetch-site": "same-origin", cookie }, body: rpc("host.describe") });
 	check("[gated] 远程+域名+Origin+带cookie POST host.describe → 200", r3, jsonOk);
 
-	// 11. 特权方法（白名单钉死 loopback）→ 全部 200
+	// 13. 特权方法（白名单钉死 loopback）→ 全部 200
 	for (const m of ["settings.describe", "credentials.describe", "llm.discoverModels", "host.pickDirectory", "host.openPath"]) {
 		const payload = m === "credentials.describe" ? { refs: ["VISION_API_KEY"] }
 			: m === "llm.discoverModels" ? { settingsNs: "llm" }
@@ -254,11 +300,11 @@ let cookie = "";
 		check(`[gated] 远程特权方法 ${m}（带cookie）→ 200`, r, jsonOk);
 	}
 
-	// 12. 垃圾 cookie → 302
+	// 14. 垃圾 cookie → 302
 	const r4 = await rawRequest({ port: gated.port, via: LAN, host: DOMAIN, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json", cookie: "dsh_gate_token=deadbeef" }, body: rpc("host.describe") });
 	check("[gated] 伪造 cookie → 302", r4.status, 302);
 
-	// 13. 本机直连（回环来源 + 回环 Host）免密放行 → 200
+	// 15. 本机直连（回环来源 + 回环 Host）免密放行 → 200
 	const r5 = await rawRequest({ port: gated.port, via: LOCAL, host: `127.0.0.1:${gated.port}`, method: "POST", path: "/api/host.describe", headers: { "content-type": "application/json" }, body: rpc("host.describe") });
 	check("[gated] 本机 POST host.describe（无cookie）→ 200", r5, jsonOk);
 

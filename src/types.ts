@@ -77,6 +77,12 @@ export interface PluginContext {
 	 */
 	loader: LoaderService;
 	/**
+	 * 因 inject: [credentials]，此处非可选（dsh-credentials seam）。
+	 * 访问密码存 credentials 域（设置界面写入 ~/.dsh/.credentials.yaml；
+	 * 进程环境变量天然优先，DSH_GATE_PASSWORD 依旧生效）。
+	 */
+	credentials: CredentialsService;
+	/**
 	 * 注册 fiber 清理回调。三种用法：
 	 *   - `ctx.effect(() => disposer, name)`：callback 返回清理函数（同步）；
 	 *   - `ctx.effect(async () => { ...; return disposer; }, name)`：callback
@@ -85,11 +91,34 @@ export interface PluginContext {
 	 * 卸载/停用/热更新时按注册逆序执行 disposer。
 	 */
 	effect<T>(callback: () => T | Promise<T>, name?: string): T;
+	/** 订阅事件（credentials/updated 等）。 */
+	on(event: string, listener: (...args: unknown[]) => unknown): () => void;
+	/** 发布事件。 */
+	emit(event: string, ...args: unknown[]): void;
 	/** 内置 logger（cordis 核心自带，可选访问以防未来移除）。 */
 	logger?: {
 		info?(message: string): void;
 		warn?(message: unknown): void;
 	};
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// credentials 服务契约（dsh-credentials seam + dsh-credentials-local）
+// 出处：@deepseek-ai/dsh-credentials/lib/index.js（服务名 "credentials"、
+//   credentials/updated 事件 L43-59）；dsh-credentials-local/lib/index.js
+//   （resolve L234 / describe L252 / set L274 / unset L278；层级：进程环境
+//   > $DSH_HOME/.credentials.yaml > 调用目录 .env > $DSH_HOME/.env）
+// ────────────────────────────────────────────────────────────────────────
+
+export interface CredentialsService {
+	/** 解析引用对应的值；未配置返回 undefined。 */
+	resolve(ref: string): Promise<{ value: string; source: string } | undefined>;
+	/** 描述配置状态（配置界面 badge 用）。 */
+	describe(ref: string): Promise<{ configured: boolean; source?: string; writable: boolean }>;
+	/** 写入（空值拒绝，用 unset 清除）。 */
+	set(ref: string, value: string): Promise<void>;
+	/** 清除。 */
+	unset(ref: string): Promise<void>;
 }
 
 // ────────────────────────────────────────────────────────────────────────
