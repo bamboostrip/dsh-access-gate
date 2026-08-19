@@ -466,3 +466,84 @@ server {
 - 推送流程：真机验收通过 → `git add -A && git commit` → 建远程仓库
   （GitHub：gh 已认证，`gh repo create`；或 Gitee / 自建 gitea.famlife.top）
   → `git remote add origin <ssh-url>` → `git push -u origin main`。
+
+## 12. rc.7 适配（v0.6.0，2026-08-19）
+
+**现象**：DSH 升级 0.1.0-rc.7 后启动即报
+`Failed to load plugins / dsh-access-gate / failed to apply loader entry
+3dfc1011 (dsh-access-gate): keyed slot "settings.plugin.item" requires
+options.key`，整个插件（含门禁）加载失败。
+
+**根因（已对照 rc.7 源码逐行核实）**：rc.7 的 slots API 把官方"插件配置"
+选项卡的 `settings.plugin.item` 从 **list slot**（注册要求 `options.id`，
+按 `order` 排序全渲染）改为 **keyed slot**（注册要求 `options.key`）：
+
+- `@deepseek-ai/dsh-client-ui-slots/lib/index.js` L77：
+  keyed slot 注册缺 `options.key` 即抛错（v0.5.0 用 `id: "auth-gate"` 注册，
+  命中此分支；client 模块的 apply 抛错 → 整个 loader entry 失败）；
+- `dsh-client-ui-settings-plugins/lib/client.js` L1318：slot 声明
+  `children: { "settings.plugin.item": { kind: "keyed", scope: "root" } }`；
+- 同文件 L380-404 + L916-993：**ConfigurablePluginsTabController 只渲染两侧
+  交集** —— host 侧 `settings.describe` 返回的 namespace 表 × client 侧注册
+  的卡片 `key`。官方卡片（BashCard 等）按 `key: <settings namespace>` 注册
+  （L1323-1344）。这意味着**光改 client 侧 key 还不够**：host 半边不注册
+  settings namespace，卡片静默不出现（不报错）。
+
+**修复（三处）**：
+
+1. `src/client.js`：注册改为 `key: "dsh-access-gate"`（去掉 `id`/`order`），
+   key 必须与 host 侧 namespace 字面量一致；
+2. `src/index.ts`：host 半边注册 settings namespace `dsh-access-gate`
+   （wiring 照官方 `installSettingsSection`，dsh-settings L618：`ctx.inject
+   (["settings"], ...)` 弱依赖 + 行配置作 base 层 + 服务离线回落行配置）；
+   schema 镜像 AuthGateConfig（password 标 secret 角色，describe 自动脱敏）。
+   顺带收益：`trustedRemotePrefixes`/`tokenTtlMs`/`config.password` 改经
+   resolved scope 读取（`current()` thunk），settings 文档覆盖实时生效；
+3. `@deepseek-ai/schemastery` 加 devDependency：schema 构造需要真
+   schemastery 对象（`register` 内部 `schema(config)` 调用 + `.toJSON()`）。
+   运行时解析：npm/GitHub 装进 profile → 从 `~/.dsh/profiles/node_modules`
+   提升 tree 解析；`link:` 开发 → 从本仓库 node_modules 解析（devDep 即为此）。
+
+**不受影响（已核实 rc.7 未变）**：`conversation.hero.workspace.directoryFlow`
+/ `sidebar.workspaces.directoryFlow` 仍是 single slot（官方 native flow 注册
+方式与本插件一致）；`ctx.locale.register(ns, {zh, en})`、credentials wire API
+（`describe({refs})`/`set({ref,value})`/`unset({ref})`）、`ctx.remote.$on
+("credentials/updated")` 均同形。
+
+**验证**：typecheck / check:package（新增 keyed 注册 + 双边 key 一致性断言）/
+E2E 57 项全绿（本机 rc.7 真实模块）；link 本机 profile 启动无报错，polyfill
+注入确认 host 半边挂载。浏览器侧卡片渲染由人工验收（设置 → 插件配置 →
+访问认证）。**本插件 v0.6.0 起要求 DSH 0.1.0-rc.7+**（rc.6 及以前的
+`settings.plugin.item` 是 list slot，`key` 注册不兼容）。
+
+### 12.1 登录页深浅模式与色板出处（v0.6.0）
+
+- **同步机制**：与官方 `dsh-client-ui-theme` 共用同一持久层（settings
+  namespace `ui-theme` 的 `preference`：light/dark/system，默认 system）。
+  host 半边经 `settings.get("ui-theme")` 实时读取（官方
+  `readPreference` 同款，dsh-client-ui-theme/lib/index.js L62-68），页面内嵌
+  与官方 `bootThemeScript` 同逻辑的引导脚本（L30-40）：system 经
+  `matchMedia('(prefers-color-scheme: dark)')` 解析，写与官方相同的 DOM
+  字段（`<html>.style.colorScheme` + `<body>` 的 `data-ds-dark-theme` 布尔
+  标记）。差异：官方是一次性引导（前端 ThemePresenter 接管），登录页是
+  独立页面，system 模式下挂 matchMedia 监听实时跟随系统切换。
+- **为什么内联色板而不用应用样式**：未认证状态下 gate 拦一切请求（包括
+  /assets 的 CSS），外链应用样式必 404/302；故取官方前端
+  `dsh-web-frontend/dist/assets/index-*.css` 中两套 token 的**实际值**内联
+  （变量名 --page-bg/--card-bg/--accent 等为本页私有命名，值来自
+  `--dsw-alias-*`/`--dsw-static-*`：dark 的 bg-base rgb(21,21,23) /
+  label-primary rgb(249,250,251) / accent deepseek-400 rgb(103,158,254) /
+  error red-400；light 的 bg rgb(245,246,247) / label-primary
+  rgb(15,17,21) / accent deepseek-500 rgb(65,118,230) / error red-600）。
+- **错误态视觉**（视觉模型审查建议采纳）：除红色提示条外，输入框边框
+  同步变红（.gate-field-error），双重定位错误位置。
+- **验证**：本机起临时端口 + 测试密码实例，curl 域名 Host 验证 302/200/
+  401 三态 HTML 结构与 preference 嵌入正确；浏览器截图三态（浅/深/深+错误）
+  经视觉模型审查：布局居中清晰、配色协调、文字对比度良好、无渲染缺陷。
+- **首帧防跳（v0.6.0）**：HTML 流式解析下居中卡片随内容增长重排，输入框
+  会"先低后高"跳一下（公网慢链路肉眼可见；手机地址栏收起时 100vh 重算
+  同理）。修复两件套：`min-height:100svh`（小视口基准，地址栏收放不再
+  重排，不支持 svh 的浏览器回落 100vh）+ 首帧门控（`<head>` 内联脚本标记
+  `html.gate-js` → CSS 隐藏 body → 解析到末尾脚本加 `body.gate-ready`
+  才以 0.18s 淡入显示，用户只见最终布局；无 JS 环境不标记、直接显示；
+  prefers-reduced-motion 关闭动画）。

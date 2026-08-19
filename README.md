@@ -44,6 +44,8 @@ npm run build
 dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 ```
 
+> 兼容性：v0.6.0 起要求 DSH **0.1.0-rc.7+**（设置卡片注册适配 keyed slot；rc.6 请用 v0.5.0）。
+
 重启 DSH 生效。**默认无密码**：远程直接可访问。设置访问密码（二选一）：
 
 ```sh
@@ -165,6 +167,8 @@ dsh plugin --profile web add github:bamboostrip/dsh-access-gate
 npm run build
 dsh plugin --profile web add link:E:/ALLCODE/project/dsh-auth-gate
 ```
+
+> Compatibility: v0.6.0 requires DSH **0.1.0-rc.7+** (settings card keyed-slot registration; for rc.6 use v0.5.0).
 
 Restart DSH to activate. **No password by default** — remote clients connect directly. To set an access password:
 

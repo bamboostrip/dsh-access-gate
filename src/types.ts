@@ -1,7 +1,7 @@
 /**
  * dsh-access-gate — 外部契约类型（集中声明对 DSH / node 运行时 API 的依赖）
  *
- * 为什么集中在这里：DSH 是测试版（当前 0.1.0-rc.6），API 可能变化。
+ * 为什么集中在这里：DSH 是测试版（当前 0.1.0-rc.7），API 可能变化。
  * 每个声明都附"出处"注释（包名 + 源码行号 + 形状说明）。DSH 升级后：
  *   1) 对照出处注释核对新源码，API 变了就改本文件；
  *   2) 本插件所有调用点都使用这些类型 —— 编译器会把需要跟着改的地方
@@ -91,6 +91,15 @@ export interface PluginContext {
 	 * 卸载/停用/热更新时按注册逆序执行 disposer。
 	 */
 	effect<T>(callback: () => T | Promise<T>, name?: string): T;
+	/**
+	 * 注入式服务依赖：所列服务就绪时执行 callback（服务已在线则立即），
+	 * 服务离线时执行其返回的清理函数并等待服务回归后重跑。官方
+	 * installSettingsSection 即用此机制挂 settings（弱依赖，服务不存在
+	 * 时插件照常工作）。
+	 * 出处：@deepseek-ai/cordis 的 Context.inject；dsh-settings/lib/index.js
+	 *   installSettingsSection L618-636（用法范式）。
+	 */
+	inject(deps: ["settings"], callback: (ctx: PluginContext & { settings: SettingsService }) => unknown): () => void;
 	/** 订阅事件（credentials/updated 等）。 */
 	on(event: string, listener: (...args: unknown[]) => unknown): () => void;
 	/** 发布事件。 */
@@ -168,7 +177,55 @@ export interface DirectoryPickerService {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// 本插件行配置（cordis.patch.yml 的 auth-gate 行 config）
+// settings 服务契约（dsh-settings seam + dsh-settings-file provider）
+// 出处：@deepseek-ai/dsh-settings/lib/index.js（服务名 "settings"，L273 起）
+//   - register(ns, schema, options)  L311-344：注册 namespace schema，
+//     返回 owner scope；registration 挂调用方 fiber，卸载即撤销
+//   - describe(options)              L352-381：全部已注册 namespace 的描述符
+//     （官方"插件配置"选项卡的数据源 —— ns 不在表中卡片就不出现）
+//   - installSettingsSection         L618-636：官方 wiring 范式
+//     （ctx.inject(["settings"]) + 行配置作 base 层 + 服务离线回落）
+// ────────────────────────────────────────────────────────────────────────
+
+/** settings namespace 注册返回的 owner scope。 */
+export interface SettingsNamespaceScope {
+	/** namespace 当前解析值（base 层 + settings 文档用户层，经 schema 解析）。 */
+	get(): unknown;
+	/** 订阅解析值变化；registration 撤销时自动清理。 */
+	watch(callback: () => void): () => void;
+}
+
+/** settings 服务（namespace 注册表；wire 面 settings.describe 的数据源）。 */
+export interface SettingsService {
+	/**
+	 * 注册一个 namespace；重复注册抛错。schema 为 schemastery 可调用对象
+	 * （本插件经 devDependency @deepseek-ai/schemastery 构造，运行时从
+	 * DSH 安装树解析）。options.base 为组合层配置（bundle patch 行 config）。
+	 */
+	register(ns: string, schema: unknown, options?: { base?: unknown; validate?: (value: unknown) => void }): SettingsNamespaceScope;
+	/**
+	 * 读任意已注册 namespace 的当前解析值（不限于本插件注册的）。
+	 * 出处：dsh-settings/lib/index.js L384-387（get(ns) → resolved）。
+	 * 登录页主题同步用它读官方 ui-theme namespace 的 preference。
+	 */
+	get(ns: string): unknown;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// 官方主题偏好（dsh-client-ui-theme）
+// 出处：dsh-client-ui-theme/lib/index.js L9-23
+//   - THEME_PREFERENCES = ['light','dark','system']，DEFAULT_PREFERENCE='system'
+//   - 持久层：settings namespace "ui-theme" 的 preference 字段（host 侧文档）
+//   - index.html 注入 bootThemeScript：system 经 matchMedia 解析 →
+//     <html>.style.colorScheme + <body> 的 data-ds-dark-theme 布尔标记
+// ────────────────────────────────────────────────────────────────────────
+
+/** dsh 的主题偏好（登录页与官方前端同步深浅模式的依据）。 */
+export type ThemePreference = "light" | "dark" | "system";
+
+// ────────────────────────────────────────────────────────────────────────
+// 本插件行配置（cordis.patch.yml 的 auth-gate 行 config；v0.6.0 起同时是
+// settings namespace dsh-access-gate 的 base 层，settings 文档可覆盖）
 // ────────────────────────────────────────────────────────────────────────
 
 export interface AuthGateConfig {

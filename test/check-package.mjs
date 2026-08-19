@@ -50,7 +50,30 @@ else {
 		const idMatch = /__ModuleLoader__\.load\(\{\s*id:\s*"([^"]+)"/.exec(source);
 		if (!idMatch) fail("client bundle 缺少 __ModuleLoader__.load({ id, factory })");
 		else if (idMatch[1] !== pkg.name) fail(`client 模块 id 应为 ${pkg.name}，实际 ${idMatch[1]}`);
-		else ok(`client 模块 id = ${pkg.name}`);
+		else {
+			ok(`client 模块 id = ${pkg.name}`);
+			// 4.5) settings.plugin.item 必须按 keyed slot 注册（rc.7 起为 keyed；
+			// v0.5.0 用 list 的 id/order 注册，rc.7 启动即抛
+			// "keyed slot \"settings.plugin.item\" requires options.key"，整个插件加载失败）
+			const keyMatch = /ctx\.slots\.inject\("settings\.plugin\.item"[\s\S]*?key:\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))/.exec(source);
+			if (!keyMatch) fail('settings.plugin.item 注册缺少 key（rc.7 keyed slot 要求 options.key）');
+			else if (/\bctx\.slots\.inject\("settings\.plugin\.item"[\s\S]*?\bid:\s*"/.test(source)) fail("settings.plugin.item 注册混入了 id（keyed slot 不认 id）");
+			else {
+				// key 可以是字面量，也可以是 `var NAME = "..."` 常量（client 源码风格）
+				const keyValue = keyMatch[1] ?? new RegExp(`var\\s+${keyMatch[2]}\\s*=\\s*"([^"]+)"`).exec(source)?.[1];
+				if (keyValue === undefined) fail(`settings.plugin.item 的 key 常量 ${keyMatch[2]} 缺少字符串定义`);
+				else {
+					ok(`settings.plugin.item keyed 注册 key = ${keyValue}`);
+					// key 必须与 host 半边注册的 settings namespace 一致：官方选项卡只渲染
+					// "host serve 的 namespace × client 卡片 key"的交集，不一致卡片静默消失
+					const hostSource = existsSync(join(root, pkg.main)) ? readFileSync(join(root, pkg.main), "utf8") : "";
+					const nsMatch = /SETTINGS_NAMESPACE\s*=\s*"([^"]+)"/.exec(hostSource);
+					if (!nsMatch) fail("host 半边缺少 SETTINGS_NAMESPACE（不注册 namespace，设置卡片永不出现）");
+					else if (nsMatch[1] !== keyValue) fail(`client key (${keyValue}) ≠ host namespace (${nsMatch[1]})，卡片不会渲染`);
+					else ok(`host settings namespace = ${nsMatch[1]}（与 client key 一致）`);
+				}
+			}
+		}
 	}
 }
 

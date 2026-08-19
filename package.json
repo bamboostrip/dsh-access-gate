@@ -1,6 +1,6 @@
 {
   "name": "dsh-access-gate",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DSH plugin: password gate for remote (non-loopback) /api access (passwordless by default), unblock the loopback-pinned privileged endpoints, restore everything on uninstall, and give the local 127.0.0.1 user the native OS folder picker for workspace selection. Zero residue by design. TypeScript source, compiled output.",
   "license": "MIT",
   "author": "bamboostrip",
@@ -71,6 +71,7 @@
     }
   },
   "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2"
   }
